@@ -19,6 +19,7 @@ export interface DiscordEmbed {
 }
 
 const NUMBER_EMOJIS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"];
+const MAX_USER_NOTE_LENGTH = 500;
 
 export function formatForSlack(prompt: RemotePrompt): SlackBlock[] {
   const blocks: SlackBlock[] = [
@@ -154,5 +155,9 @@ function parseAnswerForQuestion(text: string, q: RemoteQuestion): { answers: str
     return { answers: [q.options[single - 1].label] };
   }
 
-  return { answers: [], user_note: text };
+  return { answers: [], user_note: truncateNote(text) };
+}
+
+function truncateNote(text: string): string {
+  return text.length > MAX_USER_NOTE_LENGTH ? text.slice(0, MAX_USER_NOTE_LENGTH) + "…" : text;
 }

@@ -87,6 +87,21 @@ test("parseDiscordResponse rejects multi-question reaction parsing", () => {
   assert.match(String(result.answers.second.user_note), /single-question prompts/i);
 });
 
+test("parseSlackReply truncates user_note longer than 500 chars", () => {
+  const longText = "x".repeat(600);
+  const result = parseSlackReply(longText, [{
+    id: "q1",
+    header: "Q1",
+    question: "Pick",
+    allowMultiple: false,
+    options: [{ label: "A", description: "a" }],
+  }]);
+
+  const note = result.answers.q1.user_note!;
+  assert.ok(note.length <= 502, `note should be truncated, got ${note.length} chars`);
+  assert.ok(note.endsWith("…"), "truncated note should end with ellipsis");
+});
+
 test("isValidChannelId rejects invalid Slack channel IDs", () => {
   // Too short
   assert.equal(isValidChannelId("slack", "C123"), false);
