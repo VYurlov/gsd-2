@@ -6,6 +6,21 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-03-12
+
+### Added
+- Automatic migration of provider credentials from existing Pi installations — skip re-authentication when switching to GSD
+- Pi extensions from `~/.pi/agent/extensions/` discoverable in interactive mode
+- GitService core implementation for programmatic git operations
+
+### Changed
+- System prompt compressed by 48% (360 → 187 lines) for better context efficiency
+- Refined agent character and communication style prompts
+- Added craft standards, self-debugging awareness, and work narration to agent prompts
+
+### Fixed
+- RPC mode crash when `ctx.ui.theme` is undefined (#121)
+
 ## [2.3.11] - 2026-03-12
 
 ### Added
@@ -197,7 +212,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 - License updated to MIT
 
-[Unreleased]: https://github.com/gsd-build/gsd-2/compare/v2.3.11...HEAD
+[Unreleased]: https://github.com/gsd-build/gsd-2/compare/v2.4.0...HEAD
+[2.4.0]: https://github.com/gsd-build/gsd-2/compare/v2.3.11...v2.4.0
 [2.3.11]: https://github.com/gsd-build/gsd-2/compare/v2.3.10...v2.3.11
 [2.3.10]: https://github.com/gsd-build/gsd-2/compare/v2.3.9...v2.3.10
 [2.3.9]: https://github.com/gsd-build/gsd-2/compare/v2.3.8...v2.3.9
