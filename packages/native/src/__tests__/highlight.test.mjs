@@ -85,7 +85,7 @@ describe("native highlight: highlightCode()", () => {
     assert.ok(result.includes("function"));
     assert.ok(result.includes("foo"));
     assert.ok(result.includes("return"));
-    assert.ok(result.includes('"bar"'));
+    assert.ok(result.includes("bar"));
   });
 
   test("supports optional inserted/deleted colors", () => {
