@@ -105,6 +105,7 @@ export interface Settings {
 	showHardwareCursor?: boolean; // Show terminal cursor while still positioning it for IME
 	markdown?: MarkdownSettings;
 	async?: AsyncSettings;
+	bashInterceptor?: BashInterceptorSettings;
 }
 
 /** Deep merge settings: project/overrides take precedence, nested objects merge recursively */
@@ -367,6 +368,14 @@ export class SettingsManager {
 
 	getProjectSettings(): Settings {
 		return structuredClone(this.projectSettings);
+	}
+
+	getBashInterceptorEnabled(): boolean {
+		return this.settings.bashInterceptor?.enabled ?? true;
+	}
+
+	getBashInterceptorRules(): BashInterceptorRule[] | undefined {
+		return this.settings.bashInterceptor?.rules;
 	}
 
 	reload(): void {
