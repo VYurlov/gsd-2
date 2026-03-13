@@ -19,4 +19,5 @@ mod html;
 mod ps;
 mod task;
 mod text;
+mod ttsr;
 mod image;

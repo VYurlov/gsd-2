@@ -4,8 +4,33 @@
  * Manages rules that get injected mid-stream when their condition pattern matches
  * the agent's output. When a match occurs, the stream is aborted, the rule is
  * injected as a system reminder, and the request is retried.
+ *
+ * The regex hot-path is delegated to a native Rust RegexSet engine when
+ * available, testing all patterns in a single DFA pass. Falls back to
+ * per-rule JS RegExp iteration when the native module is not loaded.
  */
 import picomatch from "picomatch";
+
+// ── Native TTSR engine (optional) ─────────────────────────────────────
+let nativeTtsr: {
+	ttsrCompileRules: (rules: { name: string; conditions: string[] }[]) => number;
+	ttsrCheckBuffer: (handle: number, buffer: string) => string[];
+	ttsrFreeRules: (handle: number) => void;
+} | null = null;
+
+try {
+	// Dynamic import to avoid hard dependency — gracefully degrades to JS.
+	const native = await import("@gsd/native");
+	if (native.ttsrCompileRules && native.ttsrCheckBuffer && native.ttsrFreeRules) {
+		nativeTtsr = {
+			ttsrCompileRules: native.ttsrCompileRules,
+			ttsrCheckBuffer: native.ttsrCheckBuffer,
+			ttsrFreeRules: native.ttsrFreeRules,
+		};
+	}
+} catch {
+	// Native module not available — JS fallback will be used.
+}
 
 export type TtsrMatchSource = "text" | "thinking" | "tool";
 
@@ -86,6 +111,8 @@ export class TtsrManager {
 	readonly #injectionRecords = new Map<string, InjectionRecord>();
 	readonly #buffers = new Map<string, string>();
 	#messageCount = 0;
+	#nativeHandle: number | null = null;
+	#nativeDirty = false;
 
 	constructor(settings?: TtsrSettings) {
 		this.#settings = { ...DEFAULT_SETTINGS, ...settings };
@@ -245,6 +272,40 @@ export class TtsrManager {
 		return false;
 	}
 
+	/** Compile (or recompile) the native RegexSet from all current rules. */
+	#compileNative(): void {
+		if (!nativeTtsr || !this.#nativeDirty) return;
+
+		// Free previous handle if any.
+		if (this.#nativeHandle !== null) {
+			try {
+				nativeTtsr.ttsrFreeRules(this.#nativeHandle);
+			} catch { /* ignore */ }
+			this.#nativeHandle = null;
+		}
+
+		const ruleInputs: { name: string; conditions: string[] }[] = [];
+		for (const [, entry] of this.#rules) {
+			ruleInputs.push({
+				name: entry.rule.name,
+				conditions: entry.rule.condition,
+			});
+		}
+
+		if (ruleInputs.length === 0) {
+			this.#nativeDirty = false;
+			return;
+		}
+
+		try {
+			this.#nativeHandle = nativeTtsr.ttsrCompileRules(ruleInputs);
+		} catch (err) {
+			console.warn(`[ttsr] Native compilation failed, using JS fallback: ${(err as Error).message}`);
+			this.#nativeHandle = null;
+		}
+		this.#nativeDirty = false;
+	}
+
 	/** Add a TTSR rule to be monitored. */
 	addRule(rule: Rule): boolean {
 		if (this.#rules.has(rule.name)) return false;
@@ -257,6 +318,7 @@ export class TtsrManager {
 
 		const globalPathMatchers = this.#compileGlobalPathMatchers(rule.globs);
 		this.#rules.set(rule.name, { rule, conditions, scope, globalPathMatchers });
+		this.#nativeDirty = true;
 		return true;
 	}
 
@@ -265,6 +327,10 @@ export class TtsrManager {
 	 *
 	 * Buffers are isolated by source/tool key so matches don't bleed across
 	 * assistant prose, thinking text, and unrelated tool argument streams.
+	 *
+	 * When the native Rust engine is available, all regex conditions are tested
+	 * in a single DFA pass via RegexSet. Scope, glob, and repeat-gate checks
+	 * remain in JS as they are lightweight and context-dependent.
 	 */
 	checkDelta(delta: string, context: TtsrMatchContext): Rule[] {
 		const bufferKey = this.#bufferKey(context);
@@ -275,6 +341,26 @@ export class TtsrManager {
 		}
 		this.#buffers.set(bufferKey, nextBuffer);
 
+		// Lazily compile native engine if rules changed.
+		if (this.#nativeDirty) this.#compileNative();
+
+		// ── Native path: single-pass RegexSet match ───────────────────────
+		if (nativeTtsr && this.#nativeHandle !== null) {
+			const regexMatchedNames = nativeTtsr.ttsrCheckBuffer(this.#nativeHandle, nextBuffer);
+			const regexMatchedSet = new Set(regexMatchedNames);
+
+			const matches: Rule[] = [];
+			for (const [name, entry] of this.#rules) {
+				if (!regexMatchedSet.has(name)) continue;
+				if (!this.#canTrigger(name)) continue;
+				if (!this.#matchesScope(entry, context)) continue;
+				if (!this.#matchesGlobalPaths(entry, context)) continue;
+				matches.push(entry.rule);
+			}
+			return matches;
+		}
+
+		// ── JS fallback: per-rule regex iteration ─────────────────────────
 		const matches: Rule[] = [];
 		for (const [name, entry] of this.#rules) {
 			if (!this.#canTrigger(name)) continue;

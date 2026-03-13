@@ -83,3 +83,6 @@ export type {
 
 export { parseImage, ImageFormat, SamplingFilter } from "./image/index.js";
 export type { NativeImageHandle } from "./image/index.js";
+
+export { ttsrCompileRules, ttsrCheckBuffer, ttsrFreeRules } from "./ttsr/index.js";
+export type { TtsrHandle, TtsrRuleInput } from "./ttsr/index.js";
