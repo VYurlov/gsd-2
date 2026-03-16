@@ -40,7 +40,7 @@ import {
   readUnitRuntimeRecord,
   writeUnitRuntimeRecord,
 } from "./unit-runtime.js";
-import { resolveAutoSupervisorConfig, resolveModelWithFallbacksForUnit, loadEffectiveGSDPreferences, resolveSkillDiscoveryMode, resolveDynamicRoutingConfig } from "./preferences.js";
+import { resolveAutoSupervisorConfig, resolveModelWithFallbacksForUnit, loadEffectiveGSDPreferences, resolveSkillDiscoveryMode, resolveDynamicRoutingConfig, getIsolationMode } from "./preferences.js";
 import { sendDesktopNotification } from "./notifications.js";
 import type { GSDPreferences } from "./preferences.js";
 import { classifyUnitComplexity, tierLabel } from "./complexity-classifier.js";
@@ -204,12 +204,15 @@ function checkResourcesStale(): string | null {
 
 /**
  * Resolve whether auto-mode should use worktree isolation.
- * Returns true for worktree mode (default), false for branch mode.
+ * Returns true for worktree mode (default), false for branch and none modes.
  * Branch mode works directly in the project root — useful for repos
  * with git submodules where worktrees don't work well (#531).
+ * None mode skips all worktree and milestone-branch logic — commits
+ * land on the current branch with no isolation (#M001-S02).
  */
-function shouldUseWorktreeIsolation(): boolean {
+export function shouldUseWorktreeIsolation(): boolean {
   const prefs = loadEffectiveGSDPreferences()?.preferences?.git;
+  if (prefs?.isolation === "none") return false;
   if (prefs?.isolation === "branch") return false;
   return true; // default: worktree
 }
@@ -675,7 +678,7 @@ export async function startAuto(
 
     // ── Auto-worktree: re-enter worktree on resume if not already inside ──
     // Skip if already inside a worktree (manual /worktree) to prevent nesting.
-    // Skip entirely in branch isolation mode (#531).
+    // Skip entirely in branch or none isolation mode (#531).
     if (currentMilestoneId && shouldUseWorktreeIsolation() && originalBasePath && !isInAutoWorktree(basePath) && !detectWorktreeName(basePath) && !detectWorktreeName(originalBasePath)) {
       try {
         const existingWtPath = getAutoWorktreePath(originalBasePath, currentMilestoneId);
@@ -744,7 +747,7 @@ export async function startAuto(
     return;
   }
 
-  // Ensure git repo exists — GSD needs it for worktree isolation
+  // Ensure git repo exists — GSD needs it for commits and state tracking
   if (!nativeIsRepo(base)) {
     const mainBranch = loadEffectiveGSDPreferences()?.preferences?.git?.main_branch || "main";
     nativeInit(base, mainBranch);
@@ -952,7 +955,9 @@ export async function startAuto(
   // of the repo's default (main/master). Idempotent when the branch is the
   // same; updates the record when started from a different branch (#300).
   if (currentMilestoneId) {
-    captureIntegrationBranch(base, currentMilestoneId, { commitDocs });
+    if (getIsolationMode() !== "none") {
+      captureIntegrationBranch(base, currentMilestoneId, { commitDocs });
+    }
     setActiveMilestoneId(base, currentMilestoneId);
   }
 
@@ -1783,8 +1788,11 @@ async function dispatchNextUnit(
         }
       }
     } else {
-      // Not in worktree — just capture integration branch for the new milestone
-      captureIntegrationBranch(originalBasePath || basePath, mid, { commitDocs: loadEffectiveGSDPreferences()?.preferences?.git?.commit_docs });
+      // Not in worktree — capture integration branch for the new milestone (branch mode only).
+      // In none mode there's no milestone branch to merge back to, so skip.
+      if (getIsolationMode() !== "none") {
+        captureIntegrationBranch(originalBasePath || basePath, mid, { commitDocs: loadEffectiveGSDPreferences()?.preferences?.git?.commit_docs });
+      }
     }
 
     // Prune completed milestone from queue order file
@@ -1880,7 +1888,7 @@ async function dispatchNextUnit(
           try { process.chdir(basePath); } catch { /* best-effort */ }
         }
       }
-    } else if (currentMilestoneId && !isInAutoWorktree(basePath)) {
+    } else if (currentMilestoneId && !isInAutoWorktree(basePath) && getIsolationMode() !== "none") {
       // Branch isolation mode (#603): no worktree, but we may be on a milestone/* branch.
       // Squash-merge back to the integration branch (or main) before stopping.
       try {

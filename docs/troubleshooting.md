@@ -12,7 +12,7 @@ It checks:
 - File structure and naming conventions
 - Roadmap ↔ slice ↔ task referential integrity
 - Completion state consistency
-- Git worktree health
+- Git worktree health (worktree and branch modes only — skipped in none mode)
 - Stale lock files and orphaned runtime records
 
 ## Common Issues
@@ -112,3 +112,4 @@ Doctor rebuilds `STATE.md` from plan and roadmap files on disk and fixes detecte
 - **GitHub Issues:** [github.com/gsd-build/GSD-2/issues](https://github.com/gsd-build/GSD-2/issues)
 - **Dashboard:** `Ctrl+Alt+G` or `/gsd status` for real-time diagnostics
 - **Session logs:** `.gsd/activity/` contains JSONL session dumps for crash forensics
+ctivity/` contains JSONL session dumps for crash forensics

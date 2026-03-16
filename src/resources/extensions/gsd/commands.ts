@@ -991,7 +991,7 @@ async function configureGit(ctx: ExtensionCommandContext, prefs: Record<string, 
   const currentIsolation = git.isolation ? String(git.isolation) : "";
   const isolationChoice = await ctx.ui.select(
     `Git isolation strategy${currentIsolation ? ` (current: ${currentIsolation})` : " (default: worktree)"}:`,
-    ["worktree", "branch", "(keep current)"],
+    ["worktree", "branch", "none", "(keep current)"],
   );
   if (isolationChoice && isolationChoice !== "(keep current)") {
     git.isolation = isolationChoice;

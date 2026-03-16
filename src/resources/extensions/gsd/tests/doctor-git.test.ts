@@ -65,6 +65,27 @@ _None_
   return dir;
 }
 
+/** Write a .gsd/preferences.md with the given git isolation mode. */
+function writePreferencesFile(dir: string, isolation: "none" | "worktree" | "branch"): void {
+  const gsdDir = join(dir, ".gsd");
+  mkdirSync(gsdDir, { recursive: true });
+  writeFileSync(join(gsdDir, "preferences.md"), `---\ngit:\n  isolation: "${isolation}"\n---\n`);
+}
+
+/**
+ * Write preferences to the test runner's cwd .gsd/preferences.md.
+ * loadEffectiveGSDPreferences() resolves PROJECT_PREFERENCES_PATH at module
+ * load time from process.cwd(), so we must write there — not to the temp dir.
+ */
+const RUNNER_PREFS_PATH = join(process.cwd(), ".gsd", "preferences.md");
+function writeRunnerPreferences(isolation: "none" | "worktree" | "branch"): void {
+  mkdirSync(join(process.cwd(), ".gsd"), { recursive: true });
+  writeFileSync(RUNNER_PREFS_PATH, `---\ngit:\n  isolation: "${isolation}"\n---\n`);
+}
+function removeRunnerPreferences(): void {
+  try { rmSync(RUNNER_PREFS_PATH); } catch { /* ignore if already gone */ }
+}
+
 /** Create a repo with an in-progress milestone. */
 function createRepoWithActiveMilestone(): string {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "doc-git-test-")));
@@ -250,6 +271,103 @@ async function main(): Promise<void> {
     }
     } else {
       console.log("\n=== active worktree safety (skipped on Windows) ===");
+    }
+
+    // ─── Test 7: none-mode skips orphaned worktree check ───────────────
+    // NOTE: loadEffectiveGSDPreferences() resolves PROJECT_PREFERENCES_PATH
+    // at module load time from process.cwd(). We write the prefs file to
+    // the test runner's cwd .gsd/preferences.md and clean up afterwards.
+    if (process.platform !== "win32") {
+    console.log("\n=== none-mode skips orphaned worktree ===");
+    {
+      const dir = createRepoWithCompletedMilestone();
+      cleanups.push(dir);
+
+      // Create worktree with milestone/M001 branch under .gsd/worktrees/
+      mkdirSync(join(dir, ".gsd", "worktrees"), { recursive: true });
+      run("git worktree add -b milestone/M001 .gsd/worktrees/M001", dir);
+
+      // Write preferences to runner's cwd (where the module resolves project prefs)
+      writeRunnerPreferences("none");
+      try {
+        const result = await runGSDDoctor(dir);
+        const orphanIssues = result.issues.filter(i => i.code === "orphaned_auto_worktree");
+        assertEq(orphanIssues.length, 0, "none-mode: orphaned worktree NOT detected");
+      } finally {
+        removeRunnerPreferences();
+      }
+    }
+    } else {
+      console.log("\n=== none-mode skips orphaned worktree (skipped on Windows) ===");
+    }
+
+    // ─── Test 8: none-mode skips stale branch check ────────────────────
+    if (process.platform !== "win32") {
+    console.log("\n=== none-mode skips stale branch ===");
+    {
+      const dir = createRepoWithCompletedMilestone();
+      cleanups.push(dir);
+
+      // Create a milestone/M001 branch (no worktree)
+      run("git branch milestone/M001", dir);
+
+      // Write preferences to runner's cwd
+      writeRunnerPreferences("none");
+      try {
+        const result = await runGSDDoctor(dir);
+        const staleIssues = result.issues.filter(i => i.code === "stale_milestone_branch");
+        assertEq(staleIssues.length, 0, "none-mode: stale branch NOT detected");
+      } finally {
+        removeRunnerPreferences();
+      }
+    }
+    } else {
+      console.log("\n=== none-mode skips stale branch (skipped on Windows) ===");
+    }
+
+    // ─── Test 9: none-mode still detects corrupt merge state ───────────
+    console.log("\n=== none-mode keeps corrupt merge state ===");
+    {
+      const dir = createRepoWithCompletedMilestone();
+      cleanups.push(dir);
+
+      // Inject MERGE_HEAD into .git
+      const headHash = run("git rev-parse HEAD", dir);
+      writeFileSync(join(dir, ".git", "MERGE_HEAD"), headHash + "\n");
+
+      // Write preferences to runner's cwd
+      writeRunnerPreferences("none");
+      try {
+        const result = await runGSDDoctor(dir);
+        const mergeIssues = result.issues.filter(i => i.code === "corrupt_merge_state");
+        assertTrue(mergeIssues.length > 0, "none-mode: corrupt merge state IS detected");
+      } finally {
+        removeRunnerPreferences();
+      }
+    }
+
+    // ─── Test 10: none-mode still detects tracked runtime files ────────
+    console.log("\n=== none-mode keeps tracked runtime files ===");
+    {
+      const dir = createRepoWithCompletedMilestone();
+      cleanups.push(dir);
+
+      // Force-add a runtime file
+      const activityDir = join(dir, ".gsd", "activity");
+      mkdirSync(activityDir, { recursive: true });
+      writeFileSync(join(activityDir, "test.log"), "log data\n");
+      run("git add -f .gsd/activity/test.log", dir);
+      run("git commit -m \"track runtime file\"", dir);
+
+      // Write preferences to runner's cwd
+      writeRunnerPreferences("none");
+      try {
+        const result = await runGSDDoctor(dir);
+        const trackedIssues = result.issues.filter(i => i.code === "tracked_runtime_files");
+        assertTrue(trackedIssues.length > 0, "none-mode: tracked runtime files IS detected");
+      } finally {
+        removeRunnerPreferences();
+      }
     }
 
   } finally {

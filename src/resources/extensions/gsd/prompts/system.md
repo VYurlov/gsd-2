@@ -90,11 +90,17 @@ Titles live inside file content (headings, frontmatter), not in file or director
             T01-SUMMARY.md
 ```
 
-### Worktree Model
+### Isolation Model
 
-All auto-mode work happens inside a worktree at `.gsd/worktrees/<MID>/`. This is a full git worktree on the `milestone/<MID>` branch — it has its own working copy of the project and its own `.gsd/` directory. Slices commit sequentially on this branch; there are no per-slice branches. When a milestone completes, the worktree is merged back to the integration branch.
+Auto-mode supports three isolation modes (configured in `.gsd/preferences.md` under `taskIsolation.mode`):
 
-**If you are executing in auto-mode, your working directory is already set to the worktree.** Use relative paths or the path shown in the Working Directory section of your prompt. Do not navigate to any other copy of the project.
+- **worktree** (default): Work happens in `.gsd/worktrees/<MID>/`, a full git worktree on the `milestone/<MID>` branch. Each worktree has its own working copy and `.gsd/` directory. Squash-merged back to the integration branch on milestone completion.
+- **branch**: Work happens in the project root on a `milestone/<MID>` branch. No worktree directory — files are checked out in-place.
+- **none**: Work happens directly on the current branch. No worktree, no milestone branch. Commits land in-place.
+
+In all modes, slices commit sequentially on the active branch; there are no per-slice branches.
+
+**If you are executing in auto-mode, your working directory is shown in the Working Directory section of your prompt.** Use relative paths. Do not navigate to any other copy of the project.
 
 ### Conventions
 

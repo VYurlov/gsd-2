@@ -1,8 +1,36 @@
 # Git Strategy
 
-GSD uses git worktrees for milestone isolation and sequential commits within each milestone. The strategy is fully automated — you don't need to manage branches manually.
+GSD uses git for milestone isolation and sequential commits within each milestone. You choose an **isolation mode** that controls where work happens. The strategy is fully automated — you don't need to manage branches manually.
 
-## Branching Model
+## Isolation Modes
+
+GSD supports three isolation modes, configured via the `git.isolation` preference:
+
+| Mode | Working Directory | Branch | Best For |
+|------|-------------------|--------|----------|
+| `worktree` (default) | `.gsd/worktrees/<MID>/` | `milestone/<MID>` | Most projects — full file isolation between milestones |
+| `branch` | Project root | `milestone/<MID>` | Submodule-heavy repos where worktrees don't work well |
+| `none` | Project root | Current branch (no milestone branch) | Hot-reload workflows where file isolation breaks dev tooling |
+
+### `worktree` Mode (Default)
+
+Each milestone gets its own git worktree at `.gsd/worktrees/<MID>/` on a `milestone/<MID>` branch. All execution happens inside the worktree. On completion, the worktree is squash-merged to main as one clean commit. The worktree and branch are then cleaned up.
+
+This provides full file isolation — changes in a milestone can't interfere with your main working copy.
+
+### `branch` Mode
+
+Work happens in the project root on a `milestone/<MID>` branch. No worktree is created. On completion, the branch is merged to main (squash or regular merge, per `merge_strategy`).
+
+Use this when worktrees cause problems — submodule-heavy repos, repos with hardcoded paths, or environments where worktree symlinks don't behave.
+
+### `none` Mode
+
+Work happens directly on your current branch. No worktree, no milestone branch. GSD still commits sequentially with conventional commit messages, but there's no branch isolation.
+
+Use this for hot-reload workflows where file isolation breaks dev tooling (e.g., file watchers that only see the project root), or for small projects where branch overhead isn't worth it.
+
+## Branching Model (Worktree Mode)
 
 ```
 main ─────────────────────────────────────────────────────────
@@ -16,12 +44,14 @@ main ─────────────────────────
        → squash-merged to main as single commit
 ```
 
+In **branch mode**, the flow is the same except work happens in the project root instead of a separate worktree directory.
+
+In **none mode**, commits land directly on the current branch — no milestone branch is created, and no merge step is needed.
+
 ### Key Properties
 
-- **One worktree per milestone** — all work happens in `.gsd/worktrees/<MID>/`
 - **Sequential commits on one branch** — no per-slice branches, no merge conflicts within a milestone
-- **Squash merge to main** — when the milestone completes, all commits are squashed into one clean commit on main
-- **Worktree teardown** — after merge, the worktree and branch are cleaned up
+- **Squash merge to main** — in worktree and branch modes, all commits are squashed into one clean commit on main (configurable via `merge_strategy`)
 
 ### Commit Format
 
@@ -35,6 +65,8 @@ docs(M001/S04): workflow documentation
 ```
 
 ## Worktree Management
+
+These features apply only in **worktree mode**.
 
 ### Automatic (Auto Mode)
 
@@ -94,6 +126,7 @@ git:
   commit_type: feat           # override commit type prefix
   main_branch: main           # primary branch name
   commit_docs: true           # commit .gsd/ to git
+  isolation: worktree         # "worktree", "branch", or "none"
 ```
 
 ### `commit_docs: false`
@@ -106,7 +139,7 @@ GSD includes automatic recovery for common git issues:
 
 - **Detached HEAD** — automatically reattaches to the correct branch
 - **Stale lock files** — removes `index.lock` files from crashed processes
-- **Orphaned worktrees** — detects and offers to clean up abandoned worktrees
+- **Orphaned worktrees** — detects and offers to clean up abandoned worktrees (worktree mode only)
 
 Run `/gsd doctor` to check git health manually.
 

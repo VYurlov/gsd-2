@@ -193,7 +193,7 @@ git:
   commit_type: feat           # override conventional commit prefix
   main_branch: main           # primary branch name
   merge_strategy: squash      # how worktree branches merge: "squash" or "merge"
-  isolation: worktree         # git isolation: "worktree" or "branch"
+  isolation: worktree         # git isolation: "worktree", "branch", or "none"
   commit_docs: true           # commit .gsd/ artifacts to git (set false to keep local)
   worktree_post_create: .gsd/hooks/post-worktree-create  # script to run after worktree creation
 ```
@@ -208,7 +208,7 @@ git:
 | `commit_type` | string | (inferred) | Override conventional commit prefix (`feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `perf`, `ci`, `build`, `style`) |
 | `main_branch` | string | `"main"` | Primary branch name |
 | `merge_strategy` | string | `"squash"` | How worktree branches merge: `"squash"` (combine all commits) or `"merge"` (preserve individual commits) |
-| `isolation` | string | `"worktree"` | Auto-mode isolation: `"worktree"` (separate directory) or `"branch"` (work in project root — useful for submodule-heavy repos) |
+| `isolation` | string | `"worktree"` | Auto-mode isolation: `"worktree"` (separate directory), `"branch"` (work in project root — useful for submodule-heavy repos), or `"none"` (no isolation — commits on current branch, no worktree or milestone branch) |
 | `commit_docs` | boolean | `true` | Commit `.gsd/` planning artifacts to git. Set `false` to keep local-only |
 | `worktree_post_create` | string | (none) | Script to run after worktree creation. Receives `SOURCE_DIR` and `WORKTREE_DIR` env vars |
 
@@ -429,7 +429,7 @@ auto_supervisor:
 git:
   auto_push: true
   merge_strategy: squash
-  isolation: worktree
+  isolation: worktree         # "worktree", "branch", or "none"
   commit_docs: true
 
 # Skills

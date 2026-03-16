@@ -45,8 +45,9 @@ export interface GitPreferences {
   /** Controls auto-mode git isolation strategy.
    *  - "worktree": (default) creates a milestone worktree for isolated work
    *  - "branch": works directly in the project root (for submodule-heavy repos)
+   *  - "none": no git isolation — commits land on the user's current branch directly
    */
-  isolation?: "worktree" | "branch";
+  isolation?: "worktree" | "branch" | "none";
   /** When false, prevents GSD from committing .gsd/ planning artifacts to git.
    *  The .gsd/ folder is added to .gitignore and kept local-only.
    *  Default: true (planning docs are tracked in git).

@@ -155,13 +155,20 @@ async function main(): Promise<void> {
 
   console.log("\n=== existing behavior preserved ===");
 
-  // git.isolation is a valid active setting (worktree | branch) — no warnings or errors
+  // git.isolation is a valid active setting (worktree | branch | none) — no warnings or errors
   {
     const { warnings, errors, preferences } = validatePreferences({ git: { isolation: "worktree" } } as GSDPreferences);
     const unknownWarnings = warnings.filter(w => w.includes("unknown"));
     assertEq(unknownWarnings.length, 0, "git is a known key — no unknown-key warning");
     assertEq(errors.length, 0, "valid git.isolation produces no errors");
     assertEq(preferences.git?.isolation, "worktree", "git.isolation value passes through");
+  }
+  {
+    const { warnings, errors, preferences } = validatePreferences({ git: { isolation: "none" } } as GSDPreferences);
+    const unknownWarnings = warnings.filter(w => w.includes("unknown"));
+    assertEq(unknownWarnings.length, 0, "git.isolation none — no unknown-key warning");
+    assertEq(errors.length, 0, "git.isolation none produces no errors");
+    assertEq(preferences.git?.isolation, "none", "git.isolation none value passes through");
   }
 
   // git.merge_to_main is deprecated — still produces deprecation warning

@@ -1,7 +1,7 @@
 // GSD Git Preferences Tests — validates git.isolation and git.merge_to_main handling
 
 import { createTestContext } from "./test-helpers.ts";
-import { validatePreferences } from "../preferences.ts";
+import { validatePreferences, getIsolationMode } from "../preferences.ts";
 
 const { assertEq, assertTrue, report } = createTestContext();
 
@@ -21,12 +21,18 @@ async function main(): Promise<void> {
     assertEq(warnings.length, 0, "isolation: branch — no warnings");
     assertEq(preferences.git?.isolation, "branch", "isolation: branch — value preserved");
   }
+  {
+    const { preferences, warnings, errors } = validatePreferences({ git: { isolation: "none" } });
+    assertEq(errors.length, 0, "isolation: none — no errors");
+    assertEq(warnings.length, 0, "isolation: none — no warnings");
+    assertEq(preferences.git?.isolation, "none", "isolation: none — value preserved");
+  }
 
   // Invalid values produce errors
   {
     const { errors } = validatePreferences({ git: { isolation: "invalid" as any } });
     assertTrue(errors.length > 0, "isolation: invalid — produces error");
-    assertTrue(errors[0].includes("worktree, branch"), "isolation: invalid — error mentions valid values");
+    assertTrue(errors[0].includes("worktree, branch, none"), "isolation: invalid — error mentions valid values");
   }
 
   // Undefined passes through without warning
@@ -93,6 +99,19 @@ async function main(): Promise<void> {
     const { preferences, errors } = validatePreferences({ git: { auto_push: true } });
     assertEq(errors.length, 0, "commit_docs: undefined — no errors");
     assertEq(preferences.git?.commit_docs, undefined, "commit_docs: undefined — not set");
+  }
+
+  console.log("\n=== getIsolationMode() ===");
+
+  // Returns "none" when set to "none"
+  // Note: getIsolationMode() reads from disk via loadEffectiveGSDPreferences,
+  // so we test it indirectly by verifying the function is exported and callable.
+  // The validation tests above prove the preference value is stored correctly.
+  // Direct mode tests require mocking the filesystem, so we test the function's
+  // default return value (no preferences file in test context).
+  {
+    const mode = getIsolationMode();
+    assertEq(mode, "worktree", "getIsolationMode: returns worktree as default when no prefs file");
   }
 
   report();

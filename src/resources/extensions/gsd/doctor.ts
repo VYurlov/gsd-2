@@ -474,6 +474,7 @@ async function checkGitHealth(
   issues: DoctorIssue[],
   fixesApplied: string[],
   shouldFix: (code: DoctorIssueCode) => boolean,
+  isolationMode: "none" | "worktree" | "branch" = "worktree",
 ): Promise<void> {
   // Degrade gracefully if not a git repo
   if (!nativeIsRepo(basePath)) {
@@ -482,7 +483,10 @@ async function checkGitHealth(
 
   const gitDir = join(basePath, ".git");
 
-  // ── Orphaned auto-worktrees ──────────────────────────────────────────
+  // ── Orphaned auto-worktrees & Stale milestone branches ────────────────
+  // These checks only apply in worktree/branch modes — skip in none mode
+  // where no milestone worktrees or branches are created.
+  if (isolationMode !== "none") {
   try {
     const worktrees = listWorktrees(basePath);
     const milestoneWorktrees = worktrees.filter(wt => wt.branch.startsWith("milestone/"));
@@ -576,6 +580,7 @@ async function checkGitHealth(
   } catch {
     // listWorktrees or deriveState failed — skip worktree/branch checks
   }
+  } // end isolationMode !== "none"
 
   // ── Corrupt merge state ────────────────────────────────────────────────
   try {
@@ -976,7 +981,10 @@ export async function runGSDDoctor(basePath: string, options?: { fix?: boolean; 
   }
 
   // Git health checks (orphaned worktrees, stale branches, corrupt merge state, tracked runtime files)
-  await checkGitHealth(basePath, issues, fixesApplied, shouldFix);
+  const isolationMode: "none" | "worktree" | "branch" =
+    prefs?.preferences?.git?.isolation === "none" ? "none" :
+    prefs?.preferences?.git?.isolation === "branch" ? "branch" : "worktree";
+  await checkGitHealth(basePath, issues, fixesApplied, shouldFix, isolationMode);
 
   // Runtime health checks (crash locks, completed-units, hook state, activity logs, STATE.md, gitignore)
   await checkRuntimeHealth(basePath, issues, fixesApplied, shouldFix);

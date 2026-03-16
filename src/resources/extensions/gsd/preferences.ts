@@ -526,6 +526,17 @@ export function resolveSkillStalenessDays(): number {
 }
 
 /**
+ * Resolve the effective git isolation mode from preferences.
+ * Returns "worktree" (default), "branch", or "none".
+ */
+export function getIsolationMode(): "none" | "worktree" | "branch" {
+  const prefs = loadEffectiveGSDPreferences()?.preferences?.git;
+  if (prefs?.isolation === "none") return "none";
+  if (prefs?.isolation === "branch") return "branch";
+  return "worktree"; // default
+}
+
+/**
  * Resolve which model ID to use for a given auto-mode unit type.
  * Returns undefined if no model preference is set for this unit type.
  */
@@ -1197,11 +1208,11 @@ export function validatePreferences(preferences: GSDPreferences): {
       }
     }
     if (g.isolation !== undefined) {
-      const validIsolation = new Set(["worktree", "branch"]);
+      const validIsolation = new Set(["worktree", "branch", "none"]);
       if (typeof g.isolation === "string" && validIsolation.has(g.isolation)) {
-        git.isolation = g.isolation as "worktree" | "branch";
+        git.isolation = g.isolation as "worktree" | "branch" | "none";
       } else {
-        errors.push("git.isolation must be one of: worktree, branch");
+        errors.push("git.isolation must be one of: worktree, branch, none");
       }
     }
     if (g.commit_docs !== undefined) {
