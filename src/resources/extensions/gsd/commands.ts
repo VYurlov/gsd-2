@@ -266,7 +266,7 @@ export function registerGSDCommand(pi: ExtensionAPI): void {
           }
           return;
         }
-        await stopAuto(ctx, pi);
+        await stopAuto(ctx, pi, "User requested stop");
         return;
       }
 
