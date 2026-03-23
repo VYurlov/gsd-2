@@ -877,6 +877,7 @@ export interface SlicePlanningRecord {
 }
 
 export interface TaskPlanningRecord {
+  title?: string;
   description: string;
   estimate: string;
   files: string[];
@@ -1084,6 +1085,34 @@ export function updateTaskStatus(milestoneId: string, sliceId: string, taskId: s
     ":milestone_id": milestoneId,
     ":slice_id": sliceId,
     ":id": taskId,
+  });
+}
+
+export function upsertTaskPlanning(milestoneId: string, sliceId: string, taskId: string, planning: Partial<TaskPlanningRecord>): void {
+  if (!currentDb) throw new GSDError(GSD_STALE_STATE, "gsd-db: No database open");
+  currentDb.prepare(
+    `UPDATE tasks SET
+      title = COALESCE(:title, title),
+      description = COALESCE(:description, description),
+      estimate = COALESCE(:estimate, estimate),
+      files = COALESCE(:files, files),
+      verify = COALESCE(:verify, verify),
+      inputs = COALESCE(:inputs, inputs),
+      expected_output = COALESCE(:expected_output, expected_output),
+      observability_impact = COALESCE(:observability_impact, observability_impact)
+     WHERE milestone_id = :milestone_id AND slice_id = :slice_id AND id = :id`,
+  ).run({
+    ":milestone_id": milestoneId,
+    ":slice_id": sliceId,
+    ":id": taskId,
+    ":title": planning.title ?? null,
+    ":description": planning.description ?? null,
+    ":estimate": planning.estimate ?? null,
+    ":files": planning.files ? JSON.stringify(planning.files) : null,
+    ":verify": planning.verify ?? null,
+    ":inputs": planning.inputs ? JSON.stringify(planning.inputs) : null,
+    ":expected_output": planning.expectedOutput ? JSON.stringify(planning.expectedOutput) : null,
+    ":observability_impact": planning.observabilityImpact ?? null,
   });
 }
 

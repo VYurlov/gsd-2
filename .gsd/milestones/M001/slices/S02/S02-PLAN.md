@@ -20,6 +20,7 @@
 
 - `node --import ./src/resources/extensions/gsd/tests/resolve-ts.mjs --experimental-strip-types --test src/resources/extensions/gsd/tests/plan-slice.test.ts src/resources/extensions/gsd/tests/plan-task.test.ts`
 - `node --import ./src/resources/extensions/gsd/tests/resolve-ts.mjs --experimental-strip-types --test src/resources/extensions/gsd/tests/markdown-renderer.test.ts src/resources/extensions/gsd/tests/auto-recovery.test.ts src/resources/extensions/gsd/tests/prompt-contracts.test.ts --test-name-pattern="plan-slice|plan-task|renderPlanFromDb|renderTaskPlanFromDb|task plan|DB-backed planning"`
+- `node --import ./src/resources/extensions/gsd/tests/resolve-ts.mjs --experimental-strip-types --test src/resources/extensions/gsd/tests/plan-slice.test.ts src/resources/extensions/gsd/tests/plan-task.test.ts --test-name-pattern="validation failed|render failed|cache|missing parent"`
 
 ## Observability / Diagnostics
 
@@ -44,7 +45,7 @@ I’m splitting this into three tasks because there are three distinct failure b
   - Do: Implement `renderPlanFromDb()` and `renderTaskPlanFromDb()` using existing DB query helpers, emit slice/task markdown that preserves `parsePlan()` and `parseTaskPlanFile()` expectations, include conservative task-plan frontmatter (`estimated_steps`, `estimated_files`, `skills_used`), and add tests that prove rendered slice plans plus task plan files satisfy `verifyExpectedArtifact("plan-slice", ...)`.
   - Verify: `node --import ./src/resources/extensions/gsd/tests/resolve-ts.mjs --experimental-strip-types --test src/resources/extensions/gsd/tests/markdown-renderer.test.ts src/resources/extensions/gsd/tests/auto-recovery.test.ts --test-name-pattern="renderPlanFromDb|renderTaskPlanFromDb|plan-slice|task plan"`
   - Done when: DB rows can be rendered into `S##-PLAN.md` and `tasks/T##-PLAN.md` files that parse cleanly and pass the existing plan-slice runtime artifact checks.
-- [ ] **T02: Implement and register gsd_plan_slice and gsd_plan_task** `est:1.5h`
+- [x] **T02: Implement and register gsd_plan_slice and gsd_plan_task** `est:1.5h`
   - Why: This delivers the actual S02 capability: flat DB-backed planning tools for slices and tasks that write structured planning state, render truthful markdown, and clear stale caches after success.
   - Files: `src/resources/extensions/gsd/tools/plan-slice.ts`, `src/resources/extensions/gsd/tools/plan-task.ts`, `src/resources/extensions/gsd/bootstrap/db-tools.ts`, `src/resources/extensions/gsd/gsd-db.ts`, `src/resources/extensions/gsd/tests/plan-slice.test.ts`, `src/resources/extensions/gsd/tests/plan-task.test.ts`
   - Do: Follow the S01 handler pattern exactly for both tools, add any missing DB upsert/query helpers needed to populate task planning fields and retrieve slice/task planning state, register canonical tools plus aliases in `db-tools.ts`, and test validation, missing-parent rejection, transactional DB writes, render-failure handling, idempotent reruns, and observable cache invalidation.

@@ -4,6 +4,7 @@ import type { ExtensionAPI } from "@gsd/pi-coding-agent";
 import { findMilestoneIds, nextMilestoneId, claimReservedId, getReservedMilestoneIds } from "../guided-flow.js";
 import { loadEffectiveGSDPreferences } from "../preferences.js";
 import { ensureDbOpen } from "./dynamic-tools.js";
+import { StringEnum } from "@gsd/pi-ai";
 
 /**
  * Register an alias tool that shares the same execute function as its canonical counterpart.
@@ -381,6 +382,153 @@ export function registerDbTools(pi: ExtensionAPI): void {
 
   pi.registerTool(planMilestoneTool);
   registerAlias(pi, planMilestoneTool, "gsd_milestone_plan", "gsd_plan_milestone");
+
+  // ─── gsd_plan_slice (gsd_slice_plan alias) ─────────────────────────────
+
+  const planSliceExecute = async (_toolCallId: any, params: any, _signal: any, _onUpdate: any, _ctx: any) => {
+    const dbAvailable = await ensureDbOpen();
+    if (!dbAvailable) {
+      return {
+        content: [{ type: "text" as const, text: "Error: GSD database is not available. Cannot plan slice." }],
+        details: { operation: "plan_slice", error: "db_unavailable" } as any,
+      };
+    }
+    try {
+      const { handlePlanSlice } = await import("../tools/plan-slice.js");
+      const result = await handlePlanSlice(params, process.cwd());
+      if ("error" in result) {
+        return {
+          content: [{ type: "text" as const, text: `Error planning slice: ${result.error}` }],
+          details: { operation: "plan_slice", error: result.error } as any,
+        };
+      }
+      return {
+        content: [{ type: "text" as const, text: `Planned slice ${result.sliceId} (${result.milestoneId})` }],
+        details: {
+          operation: "plan_slice",
+          milestoneId: result.milestoneId,
+          sliceId: result.sliceId,
+          planPath: result.planPath,
+          taskPlanPaths: result.taskPlanPaths,
+        } as any,
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`gsd-db: plan_slice tool failed: ${msg}\n`);
+      return {
+        content: [{ type: "text" as const, text: `Error planning slice: ${msg}` }],
+        details: { operation: "plan_slice", error: msg } as any,
+      };
+    }
+  };
+
+  const planSliceTool = {
+    name: "gsd_plan_slice",
+    label: "Plan Slice",
+    description:
+      "Write slice planning state to the GSD database, render S##-PLAN.md plus task PLAN artifacts from DB, and clear caches after a successful render.",
+    promptSnippet: "Plan a slice via DB write + PLAN render + cache invalidation",
+    promptGuidelines: [
+      "Use gsd_plan_slice for slice planning instead of writing S##-PLAN.md or task PLAN files directly.",
+      "Keep parameters flat and provide the full slice planning payload, including tasks.",
+      "The tool validates input, requires an existing parent slice, writes slice/task planning data, renders PLAN.md and task plan files from DB, and clears both state and parse caches after success.",
+      "Use the canonical name gsd_plan_slice; gsd_slice_plan is only an alias.",
+    ],
+    parameters: Type.Object({
+      milestoneId: Type.String({ description: "Milestone ID (e.g. M001)" }),
+      sliceId: Type.String({ description: "Slice ID (e.g. S01)" }),
+      goal: Type.String({ description: "Slice goal" }),
+      successCriteria: Type.String({ description: "Slice success criteria block" }),
+      proofLevel: Type.String({ description: "Slice proof level" }),
+      integrationClosure: Type.String({ description: "Slice integration closure" }),
+      observabilityImpact: Type.String({ description: "Slice observability impact" }),
+      tasks: Type.Array(Type.Object({
+        taskId: Type.String({ description: "Task ID (e.g. T01)" }),
+        title: Type.String({ description: "Task title" }),
+        description: Type.String({ description: "Task description / steps block" }),
+        estimate: Type.String({ description: "Task estimate string" }),
+        files: Type.Array(Type.String(), { description: "Files likely touched" }),
+        verify: Type.String({ description: "Verification command or block" }),
+        inputs: Type.Array(Type.String(), { description: "Input files or references" }),
+        expectedOutput: Type.Array(Type.String(), { description: "Expected output files or artifacts" }),
+        observabilityImpact: Type.Optional(Type.String({ description: "Task observability impact" })),
+      }), { description: "Planned tasks for the slice" }),
+    }),
+    execute: planSliceExecute,
+  };
+
+  pi.registerTool(planSliceTool);
+  registerAlias(pi, planSliceTool, "gsd_slice_plan", "gsd_plan_slice");
+
+  // ─── gsd_plan_task (gsd_task_plan alias) ───────────────────────────────
+
+  const planTaskExecute = async (_toolCallId: any, params: any, _signal: any, _onUpdate: any, _ctx: any) => {
+    const dbAvailable = await ensureDbOpen();
+    if (!dbAvailable) {
+      return {
+        content: [{ type: "text" as const, text: "Error: GSD database is not available. Cannot plan task." }],
+        details: { operation: "plan_task", error: "db_unavailable" } as any,
+      };
+    }
+    try {
+      const { handlePlanTask } = await import("../tools/plan-task.js");
+      const result = await handlePlanTask(params, process.cwd());
+      if ("error" in result) {
+        return {
+          content: [{ type: "text" as const, text: `Error planning task: ${result.error}` }],
+          details: { operation: "plan_task", error: result.error } as any,
+        };
+      }
+      return {
+        content: [{ type: "text" as const, text: `Planned task ${result.taskId} (${result.sliceId}/${result.milestoneId})` }],
+        details: {
+          operation: "plan_task",
+          milestoneId: result.milestoneId,
+          sliceId: result.sliceId,
+          taskId: result.taskId,
+          taskPlanPath: result.taskPlanPath,
+        } as any,
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`gsd-db: plan_task tool failed: ${msg}\n`);
+      return {
+        content: [{ type: "text" as const, text: `Error planning task: ${msg}` }],
+        details: { operation: "plan_task", error: msg } as any,
+      };
+    }
+  };
+
+  const planTaskTool = {
+    name: "gsd_plan_task",
+    label: "Plan Task",
+    description:
+      "Write task planning state to the GSD database, render tasks/T##-PLAN.md from DB, and clear caches after a successful render.",
+    promptSnippet: "Plan a task via DB write + task PLAN render + cache invalidation",
+    promptGuidelines: [
+      "Use gsd_plan_task for task planning instead of writing tasks/T##-PLAN.md directly.",
+      "Keep parameters flat and provide the full task planning payload.",
+      "The tool validates input, requires an existing parent slice, writes task planning data, renders the task PLAN file from DB, and clears both state and parse caches after success.",
+      "Use the canonical name gsd_plan_task; gsd_task_plan is only an alias.",
+    ],
+    parameters: Type.Object({
+      milestoneId: Type.String({ description: "Milestone ID (e.g. M001)" }),
+      sliceId: Type.String({ description: "Slice ID (e.g. S01)" }),
+      taskId: Type.String({ description: "Task ID (e.g. T01)" }),
+      title: Type.String({ description: "Task title" }),
+      description: Type.String({ description: "Task description / steps block" }),
+      estimate: Type.String({ description: "Task estimate string" }),
+      files: Type.Array(Type.String(), { description: "Files likely touched" }),
+      verify: Type.String({ description: "Verification command or block" }),
+      inputs: Type.Array(Type.String(), { description: "Input files or references" }),
+      expectedOutput: Type.Array(Type.String(), { description: "Expected output files or artifacts" }),
+      observabilityImpact: Type.Optional(Type.String({ description: "Task observability impact" })),
+    }),
+    execute: planTaskExecute,
+  };
+
+  pi.registerTool(planTaskTool);
+  registerAlias(pi, planTaskTool, "gsd_task_plan", "gsd_plan_task");
 
   // ─── gsd_task_complete (gsd_complete_task alias) ────────────────────────
 
