@@ -63,7 +63,6 @@ export interface WorktreeResolverDeps {
   captureIntegrationBranch: (
     basePath: string,
     mid: string,
-    opts?: { commitDocs?: boolean },
   ) => void;
 }
 

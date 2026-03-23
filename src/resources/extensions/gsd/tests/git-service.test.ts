@@ -1411,16 +1411,14 @@ async function main(): Promise<void> {
     rmSync(repo, { recursive: true, force: true });
   }
 
-  // ─── autoCommit: symlinked .gsd stages new milestone artifacts (#2104) ──
+  // ─── autoCommit: symlinked .gsd does NOT stage milestone artifacts (#2247) ──
 
-  console.log("\n=== autoCommit: symlinked .gsd stages new milestone artifacts (#2104) ===");
+  console.log("\n=== autoCommit: symlinked .gsd does NOT stage milestone artifacts (#2247) ===");
 
   {
-    // Reproduction: when .gsd is a symlink (external state project),
-    // autoCommit silently fails to stage NEW .gsd/milestones/ files because:
-    //   1. nativeAddAllWithExclusions falls back to plain `git add -A` (symlink)
-    //   2. `.gsd` is in .gitignore → new .gsd/ files are invisible to `git add`
-    // The fix: smartStage() force-adds .gsd/milestones/ after the normal staging.
+    // When .gsd is a symlink (external state project), .gsd/ files live outside
+    // the repo by design. smartStage() must NOT force-stage them into git — the
+    // .gitignore exclusion is correct and intentional.
     const repo = initTempRepo();
 
     // Create an external .gsd directory and symlink it into the repo
@@ -1449,12 +1447,8 @@ async function main(): Promise<void> {
 
     const committed = run("git show --name-only HEAD", repo);
     assertTrue(committed.includes("src/feature.ts"), "symlink autoCommit: source file committed");
-    assertTrue(committed.includes(".gsd/milestones/M009/M009-SUMMARY.md"),
-      "symlink autoCommit: new M009-SUMMARY.md is committed (not silently dropped)");
-    assertTrue(committed.includes(".gsd/milestones/M009/S01-SUMMARY.md"),
-      "symlink autoCommit: new S01-SUMMARY.md is committed");
-    assertTrue(committed.includes(".gsd/milestones/M009/T01-VERIFY.json"),
-      "symlink autoCommit: new T01-VERIFY.json is committed");
+    assertTrue(!committed.includes(".gsd/milestones/"),
+      "symlink autoCommit: .gsd/milestones/ files are NOT staged (external state stays external)");
 
     try { rmSync(repo, { recursive: true, force: true }); } catch {}
     try { rmSync(externalGsd, { recursive: true, force: true }); } catch {}
