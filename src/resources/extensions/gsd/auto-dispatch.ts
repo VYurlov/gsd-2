@@ -190,7 +190,24 @@ export const DISPATCH_RULES: DispatchRule[] = [
         if (!content) continue;
         const verdictMatch = content.match(/verdict:\s*([\w-]+)/i);
         const verdict = verdictMatch?.[1]?.toLowerCase();
-        if (verdict && verdict !== "pass" && verdict !== "passed") {
+
+        // Determine acceptable verdicts based on UAT type.
+        // mixed / human-experience / live-runtime modes may legitimately
+        // produce PARTIAL when all automatable checks pass but human-only
+        // checks remain — this should not block progression.
+        const acceptableVerdicts: string[] = ["pass", "passed"];
+        const uatFile = resolveSliceFile(basePath, mid, sliceId, "UAT");
+        if (uatFile) {
+          const uatContent = await loadFile(uatFile);
+          if (uatContent) {
+            const uatType = extractUatType(uatContent);
+            if (uatType === "mixed" || uatType === "human-experience" || uatType === "live-runtime") {
+              acceptableVerdicts.push("partial");
+            }
+          }
+        }
+
+        if (verdict && !acceptableVerdicts.includes(verdict)) {
           return {
             action: "stop" as const,
             reason: `UAT verdict for ${sliceId} is "${verdict}" — blocking progression until resolved.\nReview the UAT result and update the verdict to PASS, or re-run /gsd auto after fixing.`,

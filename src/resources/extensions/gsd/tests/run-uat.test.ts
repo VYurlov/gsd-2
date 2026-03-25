@@ -343,6 +343,74 @@ test('(m) non-artifact UAT skip', async () => {
     }
 });
 
+test('(o) verdict gate: PARTIAL is acceptable for mixed/human-experience/live-runtime UAT types', () => {
+    // This test verifies the contract that extractUatType correctly identifies
+    // the modes where PARTIAL should not block progression.
+    // The verdict gate in auto-dispatch.ts uses this to build acceptableVerdicts.
+    const mixedType = extractUatType(makeUatContent('mixed'));
+    const humanExpType = extractUatType(makeUatContent('human-experience'));
+    const liveRuntimeType = extractUatType(makeUatContent('live-runtime'));
+    const artifactType = extractUatType(makeUatContent('artifact-driven'));
+    const browserType = extractUatType(makeUatContent('browser-executable'));
+    const runtimeExecType = extractUatType(makeUatContent('runtime-executable'));
+
+    // These modes should allow PARTIAL (non-fully-automatable)
+    const partialAcceptableModes = ['mixed', 'human-experience', 'live-runtime'];
+    assert.ok(
+      partialAcceptableModes.includes(mixedType!),
+      `mixed → "${mixedType}" is in partialAcceptableModes`,
+    );
+    assert.ok(
+      partialAcceptableModes.includes(humanExpType!),
+      `human-experience → "${humanExpType}" is in partialAcceptableModes`,
+    );
+    assert.ok(
+      partialAcceptableModes.includes(liveRuntimeType!),
+      `live-runtime → "${liveRuntimeType}" is in partialAcceptableModes`,
+    );
+
+    // These modes should NOT allow PARTIAL (fully automatable)
+    assert.ok(
+      !partialAcceptableModes.includes(artifactType!),
+      `artifact-driven → "${artifactType}" is NOT in partialAcceptableModes`,
+    );
+    assert.ok(
+      !partialAcceptableModes.includes(browserType!),
+      `browser-executable → "${browserType}" is NOT in partialAcceptableModes`,
+    );
+    assert.ok(
+      !partialAcceptableModes.includes(runtimeExecType!),
+      `runtime-executable → "${runtimeExecType}" is NOT in partialAcceptableModes`,
+    );
+});
+
+test('(p) run-uat prompt allows PASS when human-only checks remain as NEEDS-HUMAN', () => {
+    const promptResult = loadPromptFromWorktree('run-uat', {
+      workingDirectory: '/tmp/test-project',
+      milestoneId: 'M001',
+      sliceId: 'S01',
+      uatPath: '.gsd/milestones/M001/slices/S01/S01-UAT.md',
+      uatResultPath: '.gsd/milestones/M001/slices/S01/S01-UAT-RESULT.md',
+      uatType: 'mixed',
+      inlinedContext: '<!-- no context -->',
+    });
+
+    // PASS verdict should be usable when automatable checks pass (even with NEEDS-HUMAN remaining)
+    assert.ok(
+      /PASS.*automatable checks passed/i.test(promptResult),
+      'prompt defines PASS as valid when all automatable checks passed',
+    );
+    assert.ok(
+      /PARTIAL.*automatable checks.*(skipped|inconclusive)/i.test(promptResult),
+      'prompt reserves PARTIAL for when automatable checks themselves are inconclusive',
+    );
+    // human-experience mode should NOT force PARTIAL when automatable checks pass
+    assert.ok(
+      !promptResult.includes('use an overall verdict of `PARTIAL`'),
+      'prompt does not force PARTIAL verdict for human-experience mode',
+    );
+});
+
 test('(n) stale replay guard', async () => {
     const base = createFixtureBase();
     try {
