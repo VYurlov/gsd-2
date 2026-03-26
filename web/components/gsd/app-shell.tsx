@@ -37,6 +37,7 @@ import { UpdateBanner } from "@/components/gsd/update-banner"
 import { getAuthToken } from "@/lib/auth"
 
 const KNOWN_VIEWS = new Set(["dashboard", "power", "chat", "roadmap", "files", "activity", "visualize"])
+const WORKSPACE_CONNECTING_TOAST_ID = "workspace-connecting"
 
 function viewStorageKey(projectCwd: string): string {
   return `gsd-active-view:${projectCwd}`
@@ -216,13 +217,17 @@ function WorkspaceChrome() {
 
   // Persistent loading toast — dismissed the moment boot completes
   useEffect(() => {
-    if (!isConnecting) return
-    const id = toast.loading("Connecting to workspace…", {
-      description: "Establishing the live bridge session",
-      duration: Infinity,
-    })
+    if (isConnecting) {
+      toast.loading("Connecting to workspace...", {
+        id: WORKSPACE_CONNECTING_TOAST_ID,
+        description: "Establishing the live bridge session",
+        duration: Infinity,
+      })
+    } else {
+      toast.dismiss(WORKSPACE_CONNECTING_TOAST_ID)
+    }
     return () => {
-      toast.dismiss(id)
+      toast.dismiss(WORKSPACE_CONNECTING_TOAST_ID)
     }
   }, [isConnecting])
 

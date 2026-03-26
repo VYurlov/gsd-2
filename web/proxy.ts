@@ -65,6 +65,12 @@ export function proxy(request: NextRequest): NextResponse | undefined {
     token = request.nextUrl.searchParams.get("_token")
   }
 
+  // 3. Session cookie fallback so a browser session that already opened the
+  // authenticated launch URL can survive plain reloads / new tabs.
+  if (!token) {
+    token = request.cookies.get("gsd-auth-token")?.value ?? null
+  }
+
   if (!token || token !== expectedToken) {
     return NextResponse.json(
       { error: "Unauthorized" },

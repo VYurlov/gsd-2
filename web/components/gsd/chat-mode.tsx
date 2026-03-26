@@ -838,13 +838,6 @@ function StreamingCursor() {
 }
 
 
-function createLocalMessageId(): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID()
-  }
-  return `msg-${Date.now()}-${Math.random().toString(16).slice(2)}`
-}
-
 /* ─── Theme detection hook ─── */
 
 function useIsDark(): boolean {
@@ -2011,7 +2004,7 @@ function ToolExecutionBlock({ tool }: { tool: CompletedToolExecution }) {
  */
 export function ChatPane({ className, onOpenAction }: ChatPaneProps) {
   const state = useGSDWorkspaceState()
-  const { submitInput, sendCommand, pushChatUserMessage } = useGSDWorkspaceActions()
+  const { submitInput, sendCommand } = useGSDWorkspaceActions()
   const [terminalFontSize] = useTerminalFontSize()
 
   const connected = state.connectionState === "connected"
@@ -2067,17 +2060,8 @@ export function ChatPane({ className, onOpenAction }: ChatPaneProps) {
     const text = data.replace(/\r$/, "").trim()
     if (!text && (!images || images.length === 0)) return
 
-    const userMsg: ChatMessage = {
-      id: createLocalMessageId(),
-      role: "user",
-      content: text,
-      complete: true,
-      timestamp: Date.now(),
-      images: images?.map((i) => ({ data: i.data, mimeType: i.mimeType })),
-    }
-    pushChatUserMessage(userMsg)
     void submitInput(text, images)
-  }, [submitInput, pushChatUserMessage])
+  }, [submitInput])
 
   // Build unified timeline from store state.
   // Uses the segment-ordered data to render thinking/text/tool blocks

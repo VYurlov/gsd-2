@@ -207,12 +207,103 @@ test("/api/bridge-terminal/stream attaches to the main bridge runtime and forwar
   );
 
   const events = await readSseEvents(response, 2);
-  assert.equal(events[0].type, "connected");
-  assert.equal(events[1].type, "output");
-  assert.match(events[1].data, /native main session/);
+  assert.ok(events.some((event) => event.type === "connected"));
+  const outputEvent = events.find((event) => event.type === "output");
+  assert.ok(outputEvent);
+  assert.match(outputEvent.data, /native main session/);
 
   assert.ok(harness.commands.some((command) => command.type === "terminal_resize" && command.cols === 132 && command.rows === 41));
   assert.ok(harness.commands.some((command) => command.type === "terminal_redraw"));
+});
+
+test("/api/bridge-terminal/stream waits for the initial attach before emitting connected", async (t) => {
+  const fixture = makeWorkspaceFixture();
+  let releaseRedraw: (() => void) | null = null;
+  const redrawGate = new Promise<void>((resolve) => {
+    releaseRedraw = resolve;
+  });
+
+  const harness = createHarness((command, current) => {
+    if (command.type === "get_state") {
+      current.emit({
+        id: command.id,
+        type: "response",
+        command: "get_state",
+        success: true,
+        data: {
+          sessionId: "sess-main",
+          sessionFile: join(fixture.sessionsDir, "sess-main.jsonl"),
+          thinkingLevel: "off",
+          isStreaming: false,
+          isCompacting: false,
+          steeringMode: "all",
+          followUpMode: "all",
+          autoCompactionEnabled: false,
+          autoRetryEnabled: false,
+          retryInProgress: false,
+          retryAttempt: 0,
+          messageCount: 0,
+          pendingMessageCount: 0,
+        },
+      });
+      return;
+    }
+
+    if (command.type === "terminal_resize") {
+      current.emit({ id: command.id, type: "response", command: "terminal_resize", success: true });
+      return;
+    }
+
+    if (command.type === "terminal_redraw") {
+      void redrawGate.then(() => {
+        current.emit({ id: command.id, type: "response", command: "terminal_redraw", success: true });
+      });
+      return;
+    }
+
+    assert.fail(`unexpected command: ${command.type}`);
+  });
+
+  bridge.configureBridgeServiceForTests({
+    env: {
+      ...process.env,
+      GSD_WEB_PROJECT_CWD: fixture.projectCwd,
+      GSD_WEB_PROJECT_SESSIONS_DIR: fixture.sessionsDir,
+      GSD_WEB_PACKAGE_ROOT: repoRoot,
+    },
+    spawn: harness.spawn,
+  });
+
+  t.after(async () => {
+    await bridge.resetBridgeServiceForTests();
+    fixture.cleanup();
+  });
+
+  const response = await streamRoute.GET(
+    new Request("http://localhost/api/bridge-terminal/stream?cols=120&rows=30"),
+  );
+
+  const reader = response.body?.getReader();
+  assert.ok(reader, "SSE response has a body reader");
+
+  const pendingRead = reader.read();
+  const earlyResult = await Promise.race([
+    pendingRead.then(() => "event"),
+    new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 200)),
+  ]);
+  assert.equal(earlyResult, "timeout", "connected should not emit before redraw completes");
+
+  releaseRedraw?.();
+
+  const firstChunk = await Promise.race([
+    pendingRead,
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Timed out waiting for connected event")), 1_500)),
+  ]);
+  assert.equal(firstChunk.done, false);
+  const decoded = new TextDecoder().decode(firstChunk.value ?? new Uint8Array());
+  assert.match(decoded, /"type":"connected"/);
+
+  await reader.cancel();
 });
 
 test("bridge-terminal input and resize routes forward browser terminal traffic onto the authoritative bridge session", async (t) => {

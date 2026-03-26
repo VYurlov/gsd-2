@@ -33,6 +33,7 @@ test('web mode launcher defines or imports a browser opener', () => {
   const source = readFileSync(join(projectRoot, 'src', 'web-mode.ts'), 'utf-8')
   // openBrowser is now defined directly in web-mode.ts (was previously imported from onboarding.js)
   assert.match(source, /openBrowser/)
+  assert.match(source, /start ""/)
 })
 
 test('cli.ts branches to web mode before interactive startup and preserves cwd-scoped launch inputs', async (t) => {
@@ -73,14 +74,12 @@ test('cli.ts branches to web mode before interactive startup and preserves cwd-s
   assert.equal(result.handled, true)
   if (!result.handled) throw new Error('expected --web branch to be handled')
   assert.equal(result.exitCode, 0)
-  assert.deepEqual(launchInputs, {
-    cwd,
-    projectSessionsDir: cliWeb.getProjectSessionsDir(cwd),
-    agentDir: join(process.env.HOME || '', '.gsd', 'agent'),
-    host: undefined,
-    port: undefined,
-    allowedOrigins: undefined,
-  })
+  assert.equal(launchInputs?.cwd, cwd)
+  assert.equal(launchInputs?.projectSessionsDir, cliWeb.getProjectSessionsDir(cwd))
+  assert.match(launchInputs?.agentDir ?? '', /[\\/]\.gsd[\\/]agent$/)
+  assert.equal(launchInputs?.host, undefined)
+  assert.equal(launchInputs?.port, undefined)
+  assert.equal(launchInputs?.allowedOrigins, undefined)
 })
 
 test('launchWebMode prefers the packaged standalone host and opens the resolved URL', async (t) => {
@@ -100,6 +99,7 @@ test('launchWebMode prefers the packaged standalone host and opens the resolved 
   let writtenPid: { path: string; pid: number } | undefined
 
   const pidFilePath = join(tmp, 'web-server.pid')
+  const registryPath = join(tmp, 'web-instances.json')
 
   t.after(() => { rmSync(tmp, { recursive: true, force: true }) });
 
@@ -132,6 +132,7 @@ test('launchWebMode prefers the packaged standalone host and opens the resolved 
         openedUrl = url
       },
       pidFilePath,
+      registryPath,
       writePidFile: (path, pid) => {
         writtenPid = { path, pid }
         webMode.writePidFile(path, pid)
@@ -152,11 +153,13 @@ test('launchWebMode prefers the packaged standalone host and opens the resolved 
   assert.equal(status.url, 'http://127.0.0.1:45123')
   assert.equal(initResourcesCalled, true)
   assert.equal(unrefCalled, true)
-  // The browser URL now includes a random auth token as a fragment
-  assert.match(openedUrl, /^http:\/\/127\.0\.0\.1:45123\/#token=[a-f0-9]{64}$/)
+  // The browser URL now includes a random auth token.
+  assert.match(openedUrl, /^http:\/\/127\.0\.0\.1:45123\/(?:\?_token=[a-f0-9]{64})?#token=[a-f0-9]{64}$/)
   // Extract the auth token the launcher generated so we can verify it was
   // passed consistently to both the env and the browser URL.
-  const authToken = openedUrl.replace('http://127.0.0.1:45123/#token=', '')
+  const authTokenMatch = openedUrl.match(/#token=([a-f0-9]{64})$/)
+  assert.ok(authTokenMatch)
+  const authToken = authTokenMatch?.[1] ?? ''
   assert.deepEqual(spawnInvocation, {
     command: '/custom/node',
     args: [serverPath],
@@ -164,6 +167,7 @@ test('launchWebMode prefers the packaged standalone host and opens the resolved 
       cwd: standaloneRoot,
       detached: true,
       stdio: 'ignore',
+      windowsHide: true,
       env: {
         TEST_ENV: '1',
         HOSTNAME: '127.0.0.1',
@@ -183,6 +187,131 @@ test('launchWebMode prefers the packaged standalone host and opens the resolved 
   // PID file must be written with the spawned process's PID
   assert.deepEqual(writtenPid, { path: pidFilePath, pid: 99999 })
   assert.equal(webMode.readPidFile(pidFilePath), 99999)
+})
+
+test('launchWebMode includes a query fallback in the browser URL on Windows', async (t) => {
+  const tmp = mkdtempSync(join(tmpdir(), 'gsd-web-browser-url-win-'))
+  const standaloneRoot = join(tmp, 'dist', 'web', 'standalone')
+  const serverPath = join(standaloneRoot, 'server.js')
+  const pidFilePath = join(tmp, 'web-server.pid')
+  const registryPath = join(tmp, 'web-instances.json')
+  mkdirSync(standaloneRoot, { recursive: true })
+  writeFileSync(serverPath, 'console.log("stub")\n')
+
+  let openedUrl = ''
+
+  t.after(() => { rmSync(tmp, { recursive: true, force: true }) });
+
+  const status = await webMode.launchWebMode(
+    {
+      cwd: '/tmp/current-project',
+      projectSessionsDir: '/tmp/.gsd/sessions/current-project',
+      agentDir: '/tmp/.gsd/agent',
+      packageRoot: tmp,
+    },
+    {
+      initResources: () => {},
+      resolvePort: async () => 45124,
+      execPath: '/custom/node',
+      platform: 'win32',
+      env: { TEST_ENV: '1' },
+      spawn: () => ({
+        pid: 99998,
+        once: () => undefined,
+        unref: () => {},
+      } as any),
+      waitForBootReady: async () => undefined,
+      openBrowser: (url) => {
+        openedUrl = url
+      },
+      pidFilePath,
+      registryPath,
+      stderr: { write: () => true },
+    },
+  )
+
+  assert.equal(status.ok, true)
+  if (!status.ok) throw new Error('expected successful web launch status')
+  assert.match(openedUrl, /^http:\/\/127\.0\.0\.1:45124\/\?_token=[a-f0-9]{64}#token=[a-f0-9]{64}$/)
+  const match = openedUrl.match(/\?_token=([a-f0-9]{64})#token=([a-f0-9]{64})$/)
+  assert.ok(match)
+  assert.equal(match?.[1], match?.[2], 'query and fragment should carry the same auth token')
+})
+
+test('launchWebMode uses the hidden Windows source-dev launcher for Next dev', async (t) => {
+  const tmp = mkdtempSync(join(tmpdir(), 'gsd-web-source-dev-win-'))
+  const webRoot = join(tmp, 'web')
+  const manifestPath = join(webRoot, 'package.json')
+  const pidFilePath = join(tmp, 'web-server.pid')
+  const registryPath = join(tmp, 'web-instances.json')
+  mkdirSync(webRoot, { recursive: true })
+  writeFileSync(manifestPath, JSON.stringify({ name: 'gsd-web' }))
+
+  let hiddenLaunchInvocation:
+    | { command: string; args: string[]; options: { cwd: string; env: NodeJS.ProcessEnv } }
+    | undefined
+  let openedUrl = ''
+
+  t.after(() => { rmSync(tmp, { recursive: true, force: true }) });
+
+  const status = await webMode.launchWebMode(
+    {
+      cwd: '/tmp/current-project',
+      projectSessionsDir: '/tmp/.gsd/sessions/current-project',
+      agentDir: '/tmp/.gsd/agent',
+      packageRoot: tmp,
+    },
+    {
+      initResources: () => {},
+      resolvePort: async () => 45125,
+      execPath: '/custom/node',
+      platform: 'win32',
+      env: { TEST_ENV: '1' },
+      spawn: () => {
+        throw new Error('spawn should not be used for Windows source-dev launch')
+      },
+      spawnWindowsHiddenProcess: async (command, args, options) => {
+        hiddenLaunchInvocation = { command, args, options }
+        return {
+          pid: 99997,
+          once: () => undefined,
+          unref: () => {},
+        } as any
+      },
+      waitForBootReady: async () => undefined,
+      openBrowser: (url) => {
+        openedUrl = url
+      },
+      pidFilePath,
+      registryPath,
+      stderr: { write: () => true },
+    },
+  )
+
+  assert.equal(status.ok, true)
+  if (!status.ok) throw new Error('expected successful web launch status')
+  assert.equal(status.hostKind, 'source-dev')
+  assert.deepEqual(hiddenLaunchInvocation, {
+    command: '/custom/node',
+    args: [join(webRoot, 'node_modules', 'next', 'dist', 'bin', 'next'), 'dev', '--webpack', '--hostname', '127.0.0.1', '--port', '45125'],
+    options: {
+      cwd: webRoot,
+      env: {
+        TEST_ENV: '1',
+        HOSTNAME: '127.0.0.1',
+        PORT: '45125',
+        GSD_WEB_HOST: '127.0.0.1',
+        GSD_WEB_PORT: '45125',
+        GSD_WEB_AUTH_TOKEN: openedUrl.match(/#token=([a-f0-9]{64})$/)?.[1] ?? '',
+        GSD_WEB_PROJECT_CWD: '/tmp/current-project',
+        GSD_WEB_PROJECT_SESSIONS_DIR: '/tmp/.gsd/sessions/current-project',
+        GSD_WEB_PACKAGE_ROOT: tmp,
+        GSD_WEB_HOST_KIND: 'source-dev',
+        NEXT_PUBLIC_GSD_DEV: '1',
+      },
+    },
+  })
+  assert.match(openedUrl, /^http:\/\/127\.0\.0\.1:45125\/\?_token=[a-f0-9]{64}#token=[a-f0-9]{64}$/)
 })
 
 test('stopWebMode kills process by PID and removes PID file', (t) => {

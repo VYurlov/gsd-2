@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils"
 import { validateImageFile } from "@/lib/image-utils"
 import { buildProjectAbsoluteUrl, buildProjectPath } from "@/lib/project-url"
 import { authFetch, appendAuthParam } from "@/lib/auth"
+import { useGSDWorkspaceState } from "@/lib/gsd-workspace-store"
 import "@xterm/xterm/css/xterm.css"
 
 type XTerminal = import("@xterm/xterm").Terminal
@@ -153,6 +154,7 @@ async function settleTerminalLayout(
 export function MainSessionTerminal({ className, fontSize, projectCwd }: MainSessionTerminalProps) {
   const { resolvedTheme } = useTheme()
   const isDark = resolvedTheme !== "light"
+  const workspaceConnectionState = useGSDWorkspaceState().connectionState
   const wrapperRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<XTerminal | null>(null)
@@ -161,14 +163,30 @@ export function MainSessionTerminal({ className, fontSize, projectCwd }: MainSes
   const resizeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const inputQueueRef = useRef<string[]>([])
   const flushingRef = useRef(false)
+  const terminalConnectionStateRef = useRef<"connecting" | "connected" | "error">("connecting")
+  const workspaceConnectionStateRef = useRef(workspaceConnectionState)
+  const interactionReadyRef = useRef(false)
   const [connectionState, setConnectionState] = useState<"connecting" | "connected" | "error">("connecting")
   const [hasOutput, setHasOutput] = useState(false)
   const [isDragOver, setIsDragOver] = useState(false)
+  const interactionReady = connectionState === "connected" && workspaceConnectionState === "connected"
+
+  const syncInteractionReady = useCallback(() => {
+    interactionReadyRef.current =
+      terminalConnectionStateRef.current === "connected" &&
+      workspaceConnectionStateRef.current === "connected"
+  }, [])
+
+  const commitTerminalConnectionState = useCallback((next: "connecting" | "connected" | "error") => {
+    terminalConnectionStateRef.current = next
+    syncInteractionReady()
+    setConnectionState(next)
+  }, [syncInteractionReady])
 
   const flushInputQueue = useCallback(async () => {
-    if (flushingRef.current) return
+    if (flushingRef.current || !interactionReadyRef.current) return
     flushingRef.current = true
-    while (inputQueueRef.current.length > 0) {
+    while (interactionReadyRef.current && inputQueueRef.current.length > 0) {
       const data = inputQueueRef.current.shift()!
       try {
         await authFetch(buildProjectPath("/api/bridge-terminal/input", projectCwd), {
@@ -186,7 +204,9 @@ export function MainSessionTerminal({ className, fontSize, projectCwd }: MainSes
 
   const sendInput = useCallback((data: string) => {
     inputQueueRef.current.push(data)
-    void flushInputQueue()
+    if (interactionReadyRef.current) {
+      void flushInputQueue()
+    }
   }, [flushInputQueue])
 
   const sendResize = useCallback((cols: number, rows: number) => {
@@ -216,6 +236,14 @@ export function MainSessionTerminal({ className, fontSize, projectCwd }: MainSes
       // Hidden or not mounted yet.
     }
   }, [fontSize, sendResize])
+
+  useEffect(() => {
+    workspaceConnectionStateRef.current = workspaceConnectionState
+    syncInteractionReady()
+    if (interactionReadyRef.current) {
+      void flushInputQueue()
+    }
+  }, [flushInputQueue, syncInteractionReady, workspaceConnectionState])
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -264,16 +292,24 @@ export function MainSessionTerminal({ className, fontSize, projectCwd }: MainSes
 
         const es = new EventSource(appendAuthParam(streamUrl.toString()))
         eventSourceRef.current = es
-        setConnectionState((current) => (current === "connected" ? current : "connecting"))
+        if (terminalConnectionStateRef.current !== "connected") {
+          commitTerminalConnectionState("connecting")
+        }
 
         es.onmessage = (event) => {
           try {
             const message = JSON.parse(event.data) as { type: string; data?: string }
             if (message.type === "connected") {
-              setConnectionState("connected")
+              commitTerminalConnectionState("connected")
+              if (interactionReadyRef.current) {
+                void flushInputQueue()
+              }
               void settleTerminalLayout(containerRef.current, termRef.current, fitAddonRef.current, () => disposed).then((size) => {
                 if (!size) return
                 sendResize(size.cols, size.rows)
+                if (interactionReadyRef.current) {
+                  void flushInputQueue()
+                }
               })
               return
             }
@@ -281,14 +317,19 @@ export function MainSessionTerminal({ className, fontSize, projectCwd }: MainSes
             if (message.type === "output" && typeof message.data === "string") {
               termRef.current?.write(message.data)
               setHasOutput(true)
+              return
+            }
+
+            if (message.type === "error") {
+              commitTerminalConnectionState("error")
             }
           } catch {
-            setConnectionState("error")
+            commitTerminalConnectionState("error")
           }
         }
 
         es.onerror = () => {
-          setConnectionState("error")
+          commitTerminalConnectionState("error")
         }
       }
 
@@ -317,10 +358,12 @@ export function MainSessionTerminal({ className, fontSize, projectCwd }: MainSes
       eventSourceRef.current = null
       resizeObserver?.disconnect()
       terminal?.dispose()
+      terminalConnectionStateRef.current = "connecting"
+      syncInteractionReady()
       termRef.current = null
       fitAddonRef.current = null
     }
-  }, [fontSize, isDark, projectCwd, sendInput, sendResize])
+  }, [commitTerminalConnectionState, flushInputQueue, fontSize, isDark, projectCwd, sendInput, sendResize, syncInteractionReady])
 
   const handleClick = useCallback(() => {
     termRef.current?.focus()
@@ -441,11 +484,15 @@ export function MainSessionTerminal({ className, fontSize, projectCwd }: MainSes
       onClick={handleClick}
       data-testid="main-session-native-terminal"
     >
-      {!hasOutput && (
+      {(!hasOutput || !interactionReady) && (
         <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-terminal">
           <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
           <span className="text-xs text-muted-foreground">
-            {connectionState === "error" ? "Reconnecting main session terminal…" : "Connecting to main session…"}
+            {connectionState === "error" || workspaceConnectionState === "error"
+              ? "Reconnecting main session terminal..."
+              : hasOutput
+                ? "Waiting for workspace sync..."
+                : "Connecting to main session..."}
           </span>
         </div>
       )}

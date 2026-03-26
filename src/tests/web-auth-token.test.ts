@@ -20,12 +20,20 @@ test('auth.ts persists token to sessionStorage on extraction', () => {
   assert.match(authSource, /sessionStorage\.setItem/, 'should persist token to sessionStorage after extracting from hash')
 })
 
+test('auth.ts accepts a one-time query parameter fallback token', () => {
+  assert.match(authSource, /searchParams\.get\("_token"\)/, 'should read a _token query parameter when present')
+})
+
 test('auth.ts falls back to sessionStorage when hash is absent', () => {
   assert.match(authSource, /sessionStorage\.getItem/, 'should read from sessionStorage when URL hash is empty')
 })
 
 test('auth.ts defines a sessionStorage key constant', () => {
   assert.match(authSource, /SESSION_STORAGE_KEY/, 'should use a named constant for the sessionStorage key')
+})
+
+test('auth.ts mirrors the token into a browser cookie', () => {
+  assert.match(authSource, /document\.cookie/, 'should persist the token into a session cookie')
 })
 
 test('auth.ts clears the URL fragment after token extraction', () => {
@@ -79,6 +87,10 @@ test('proxy.ts accepts _token query parameter as fallback authentication', () =>
 
 test('proxy.ts validates bearer token from Authorization header', () => {
   assert.match(proxySource, /Bearer/, 'proxy should check Authorization: Bearer header')
+})
+
+test('proxy.ts accepts the session cookie as a fallback authentication source', () => {
+  assert.match(proxySource, /request\.cookies\.get\("gsd-auth-token"\)/, 'proxy should accept the gsd-auth-token cookie')
 })
 
 test('proxy.ts skips auth when GSD_WEB_AUTH_TOKEN is not set', () => {

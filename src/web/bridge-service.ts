@@ -658,9 +658,36 @@ const defaultBridgeServiceDeps: BridgeServiceDeps = {
   listSessions: async (projectSessionsDir: string) => listProjectSessions(projectSessionsDir),
 };
 
-let bridgeServiceOverrides: Partial<BridgeServiceDeps> | null = null;
-const projectBridgeRegistry = new Map<string, BridgeService>();
-const workspaceIndexCache = new Map<string, WorkspaceIndexCacheEntry>();
+type BridgeServiceSingletonState = {
+  projectBridgeRegistry: Map<string, BridgeService>;
+  workspaceIndexCache: Map<string, WorkspaceIndexCacheEntry>;
+  bridgeServiceOverrides: Partial<BridgeServiceDeps> | null;
+};
+
+const BRIDGE_SERVICE_SINGLETON_KEY = "__gsdWebBridgeServiceSingletonState__";
+
+function getBridgeServiceSingletonState(): BridgeServiceSingletonState {
+  const globalScope = globalThis as typeof globalThis & {
+    [BRIDGE_SERVICE_SINGLETON_KEY]?: BridgeServiceSingletonState;
+  };
+
+  // Next dev can evaluate route modules more than once. Keep bridge state on
+  // globalThis so session command, chat SSE, and bridge-terminal routes all
+  // talk to the same live bridge within the process.
+  if (!globalScope[BRIDGE_SERVICE_SINGLETON_KEY]) {
+    globalScope[BRIDGE_SERVICE_SINGLETON_KEY] = {
+      projectBridgeRegistry: new Map<string, BridgeService>(),
+      workspaceIndexCache: new Map<string, WorkspaceIndexCacheEntry>(),
+      bridgeServiceOverrides: null,
+    };
+  }
+
+  return globalScope[BRIDGE_SERVICE_SINGLETON_KEY]!;
+}
+
+const bridgeServiceSingletonState = getBridgeServiceSingletonState();
+const projectBridgeRegistry = bridgeServiceSingletonState.projectBridgeRegistry;
+const workspaceIndexCache = bridgeServiceSingletonState.workspaceIndexCache;
 
 async function loadSessionBrowserSessionsViaChildProcess(config: BridgeRuntimeConfig): Promise<SessionInfo[]> {
   const deps = getBridgeDeps();
@@ -849,7 +876,7 @@ function destroyChildStreams(child: Partial<SpawnedRpcChild> | null | undefined)
 }
 
 function getBridgeDeps(): BridgeServiceDeps {
-  return { ...defaultBridgeServiceDeps, ...(bridgeServiceOverrides ?? {}) };
+  return { ...defaultBridgeServiceDeps, ...(bridgeServiceSingletonState.bridgeServiceOverrides ?? {}) };
 }
 
 function cloneWorkspaceIndex(index: GSDWorkspaceIndex): GSDWorkspaceIndex {
@@ -1535,6 +1562,7 @@ export class BridgeService {
       cwd: cliEntry.cwd,
       env: childEnv,
       stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
     }) as SpawnedRpcChild;
 
     this.process = child;
@@ -2272,7 +2300,7 @@ export async function sendBridgeInput(input: BridgeInput, projectCwd?: string): 
 }
 
 export function configureBridgeServiceForTests(overrides: Partial<BridgeServiceDeps> | null): void {
-  bridgeServiceOverrides = overrides;
+  bridgeServiceSingletonState.bridgeServiceOverrides = overrides;
   invalidateWorkspaceIndexCache();
 }
 
@@ -2283,6 +2311,6 @@ export async function resetBridgeServiceForTests(): Promise<void> {
   }
   await Promise.all(disposePromises);
   projectBridgeRegistry.clear();
-  bridgeServiceOverrides = null;
+  bridgeServiceSingletonState.bridgeServiceOverrides = null;
   invalidateWorkspaceIndexCache();
 }

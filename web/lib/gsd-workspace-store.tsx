@@ -418,6 +418,16 @@ export interface MessageUpdateEvent {
   [key: string]: unknown
 }
 
+export interface MessageBoundaryEvent {
+  type: "message_end" | "message_start"
+  message?: {
+    role?: string
+    content?: unknown
+    [key: string]: unknown
+  }
+  [key: string]: unknown
+}
+
 export interface ToolExecutionStartEvent {
   type: "tool_execution_start"
   toolCallId: string
@@ -448,12 +458,13 @@ export type WorkspaceEvent =
   | LiveStateInvalidationEvent
   | ExtensionUiRequestEvent
   | ExtensionErrorEvent
+  | MessageBoundaryEvent
   | MessageUpdateEvent
   | ToolExecutionStartEvent
   | ToolExecutionEndEvent
   | AgentEndEvent
   | TurnEndEvent
-  | ({ type: Exclude<string, "bridge_status" | "live_state_invalidation" | "extension_ui_request" | "extension_error" | "message_update" | "tool_execution_start" | "tool_execution_end" | "agent_end" | "turn_end">; [key: string]: unknown } & Record<string, unknown>)
+  | ({ type: Exclude<string, "bridge_status" | "live_state_invalidation" | "extension_ui_request" | "extension_error" | "message_start" | "message_end" | "message_update" | "tool_execution_start" | "tool_execution_end" | "agent_end" | "turn_end">; [key: string]: unknown } & Record<string, unknown>)
 
 export interface WorkspaceCommandResponse {
   type: "response"
@@ -630,6 +641,61 @@ function createTerminalLine(type: TerminalLineType, content: string): WorkspaceT
     content,
     timestamp: timestampLabel(),
   }
+}
+
+function createChatMessageId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID()
+  }
+  return `msg-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+function extractBridgeMessageTextContent(content: unknown): string {
+  if (typeof content === "string") {
+    return content
+  }
+
+  if (!Array.isArray(content)) {
+    return ""
+  }
+
+  return content
+    .flatMap((part) => {
+      if (typeof part !== "object" || part === null) {
+        return []
+      }
+
+      if ((part as { type?: unknown }).type !== "text" || typeof (part as { text?: unknown }).text !== "string") {
+        return []
+      }
+
+      return [(part as { text: string }).text]
+    })
+    .join("")
+}
+
+function extractBridgeMessageImages(content: unknown): ChatMessage["images"] | undefined {
+  if (!Array.isArray(content)) {
+    return undefined
+  }
+
+  const images = content
+    .flatMap((part) => {
+      if (typeof part !== "object" || part === null) {
+        return []
+      }
+
+      const type = (part as { type?: unknown }).type
+      const data = (part as { data?: unknown }).data
+      const mimeType = (part as { mimeType?: unknown }).mimeType
+      if (type !== "image" || typeof data !== "string" || typeof mimeType !== "string") {
+        return []
+      }
+
+      return [{ data, mimeType }]
+    })
+
+  return images.length > 0 ? images : undefined
 }
 
 function withTerminalLine(lines: WorkspaceTerminalLine[], line: WorkspaceTerminalLine): WorkspaceTerminalLine[] {
@@ -4910,6 +4976,9 @@ export class GSDWorkspaceStore {
       case "extension_ui_request":
         this.handleExtensionUiRequest(event as ExtensionUiRequestEvent)
         break
+      case "message_end":
+        this.handleMessageEnd(event as MessageBoundaryEvent)
+        break
       case "message_update":
         this.handleMessageUpdate(event as MessageUpdateEvent)
         break
@@ -4924,6 +4993,29 @@ export class GSDWorkspaceStore {
         this.handleToolExecutionEnd(event as ToolExecutionEndEvent)
         break
     }
+  }
+
+  private handleMessageEnd(event: MessageBoundaryEvent): void {
+    const message = event.message
+    if (!message || message.role !== "user") return
+
+    const content = extractBridgeMessageTextContent(message.content)
+    const images = extractBridgeMessageImages(message.content)
+    if (!content.trim() && !images?.length) return
+
+    this.patchState({
+      chatUserMessages: [
+        ...this.state.chatUserMessages,
+        {
+          id: createChatMessageId(),
+          role: "user",
+          content,
+          complete: true,
+          images,
+          timestamp: Date.now(),
+        },
+      ],
+    })
   }
 
   private handleExtensionUiRequest(event: ExtensionUiRequestEvent): void {

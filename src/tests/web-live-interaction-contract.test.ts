@@ -274,6 +274,7 @@ interface MinimalLiveState {
   pendingUiRequests: any[];
   streamingAssistantText: string;
   liveTranscript: string[];
+  chatUserMessages: Array<{ role: string; content: string; complete: boolean }>;
   activeToolExecution: { id: string; name: string } | null;
   statusTexts: Record<string, string>;
   widgetContents: Record<string, { lines: string[] | undefined; placement?: string }>;
@@ -286,6 +287,7 @@ function createMinimalLiveState(): MinimalLiveState {
     pendingUiRequests: [],
     streamingAssistantText: "",
     liveTranscript: [],
+    chatUserMessages: [],
     activeToolExecution: null,
     statusTexts: {},
     widgetContents: {},
@@ -345,6 +347,26 @@ function routeEvent(state: MinimalLiveState, event: any): MinimalLiveState {
       const ae = event.assistantMessageEvent;
       if (ae && ae.type === "text_delta" && typeof ae.delta === "string") {
         s.streamingAssistantText = s.streamingAssistantText + ae.delta;
+      }
+      break;
+    }
+    case "message_end": {
+      if (event.message?.role === "user") {
+        const content = typeof event.message.content === "string"
+          ? event.message.content
+          : Array.isArray(event.message.content)
+            ? event.message.content
+              .filter((part: any) => part?.type === "text" && typeof part?.text === "string")
+              .map((part: any) => part.text)
+              .join("")
+            : "";
+
+        if (content.trim()) {
+          s.chatUserMessages = [
+            ...s.chatUserMessages,
+            { role: "user", content, complete: true },
+          ];
+        }
       }
       break;
     }
@@ -682,6 +704,62 @@ test("(f) agent_end moves streaming text to transcript and resets streaming text
   // Agent end with no streaming text → no empty transcript entry
   state = routeEvent(state, { type: "agent_end" });
   assert.equal(state.liveTranscript.length, 2);
+});
+
+test("(f2) authoritative user message_end events populate chat-mode prompts for non-chat surfaces", async (t) => {
+  let state = createMinimalLiveState();
+
+  state = routeEvent(state, {
+    type: "message_end",
+    message: { role: "user", content: "export this as markdown" },
+  });
+  assert.equal(state.chatUserMessages.length, 1);
+  assert.equal(state.chatUserMessages[0]?.content, "export this as markdown");
+
+  const fixture = makeWorkspaceFixture();
+  const sessionPath = createSessionFile(fixture.projectCwd, fixture.sessionsDir, "sess-user-msg", "User Message Session");
+  const harness = createHarness((command, current) => {
+    if (command.type === "get_state") {
+      current.emit({
+        id: command.id,
+        type: "response",
+        command: "get_state",
+        success: true,
+        data: fakeSessionState("sess-user-msg", sessionPath),
+      });
+      return;
+    }
+    assert.fail(`unexpected command: ${command.type}`);
+  });
+
+  setupBridge(harness, fixture);
+
+  t.after(async () => {
+    await bridge.resetBridgeServiceForTests();
+    onboarding.resetOnboardingServiceForTests();
+    fixture.cleanup();
+  });
+
+  const controller = new AbortController();
+  const response = await eventsRoute.GET(
+    new Request("http://localhost/api/session/events", { signal: controller.signal }),
+  );
+
+  harness.emit({
+    type: "message_end",
+    message: { role: "user", content: "sync this prompt everywhere" },
+  });
+
+  const events = await readSseEvents(response, 2); // bridge_status + message_end
+  controller.abort();
+  await waitForMicrotasks();
+
+  const messageEndEvent = events.find((e) => e.type === "message_end");
+  assert.ok(messageEndEvent, "message_end event received via SSE");
+
+  state = routeEvent(createMinimalLiveState(), messageEndEvent);
+  assert.equal(state.chatUserMessages.length, 1);
+  assert.equal(state.chatUserMessages[0]?.content, "sync this prompt everywhere");
 });
 
 test("(g) setStatus/setWidget/setTitle/set_editor_text fire-and-forget events update correct store state", async () => {

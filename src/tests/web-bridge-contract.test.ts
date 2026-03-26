@@ -181,10 +181,12 @@ function createHarness(onCommand: (command: any, harness: ReturnType<typeof crea
   let spawnCalls = 0;
   let child: FakeRpcChild | null = null;
   const commands: any[] = [];
+  let lastSpawn: { command: string; args: readonly string[]; options: Record<string, unknown> } | null = null;
 
   const harness = {
     spawn(command: string, args: readonly string[], options: Record<string, unknown>) {
       spawnCalls += 1;
+      lastSpawn = { command, args, options };
       child = new FakeRpcChild();
       attachJsonLineReader(child.stdin, (line) => {
         const parsed = JSON.parse(line);
@@ -216,6 +218,9 @@ function createHarness(onCommand: (command: any, harness: ReturnType<typeof crea
     },
     get commands() {
       return commands;
+    },
+    get lastSpawn() {
+      return lastSpawn;
     },
     get child() {
       return child;
@@ -334,6 +339,63 @@ test("/api/boot returns current-project workspace data, resumable sessions, onbo
   assert.equal(payload.bridge.sessionState.retryInProgress, false);
   assert.equal(payload.bridge.sessionState.retryAttempt, 0);
   assert.equal(harness.spawnCalls, 1);
+});
+
+test("bridge RPC subprocess is spawned with the embedded TUI env and hidden Windows console", async (t) => {
+  const fixture = makeWorkspaceFixture();
+  const sessionPath = createSessionFile(fixture.projectCwd, fixture.sessionsDir, "sess-spawn", "Spawn Options");
+  const harness = createHarness((command, current) => {
+    if (command.type === "get_state") {
+      current.emit({
+        id: command.id,
+        type: "response",
+        command: "get_state",
+        success: true,
+        data: {
+          sessionId: "sess-spawn",
+          sessionFile: sessionPath,
+          thinkingLevel: "off",
+          isStreaming: false,
+          isCompacting: false,
+          steeringMode: "all",
+          followUpMode: "all",
+          autoCompactionEnabled: false,
+          autoRetryEnabled: false,
+          retryInProgress: false,
+          retryAttempt: 0,
+          messageCount: 0,
+          pendingMessageCount: 0,
+        },
+      });
+      return;
+    }
+
+    assert.fail(`unexpected command during spawn verification: ${command.type}`);
+  });
+
+  bridge.configureBridgeServiceForTests({
+    env: {
+      ...process.env,
+      GSD_WEB_PROJECT_CWD: fixture.projectCwd,
+      GSD_WEB_PROJECT_SESSIONS_DIR: fixture.sessionsDir,
+      GSD_WEB_PACKAGE_ROOT: repoRoot,
+    },
+    spawn: harness.spawn,
+    indexWorkspace: async () => fakeWorkspaceIndex(),
+    getAutoDashboardData: () => fakeAutoDashboardData(),
+    getOnboardingNeeded: () => false,
+  });
+
+  t.after(async () => {
+    await bridge.resetBridgeServiceForTests();
+    fixture.cleanup();
+  });
+
+  const response = await bootRoute.GET();
+  assert.equal(response.status, 200);
+  assert.ok(harness.lastSpawn, "bridge subprocess should have been spawned");
+  assert.equal(harness.lastSpawn?.options.windowsHide, true);
+  assert.equal((harness.lastSpawn?.options.env as Record<string, string>)?.GSD_WEB_BRIDGE_TUI, "1");
 });
 
 test("/api/boot uses the authoritative auto helper by default and stays snapshot-shaped", async (t) => {

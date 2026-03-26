@@ -3,27 +3,57 @@
  *
  * The web server generates a random bearer token at launch and passes it to
  * the browser via the URL fragment (e.g. `http://127.0.0.1:3000/#token=<hex>`).
- * Fragments are never sent in HTTP requests or logged by servers/proxies,
- * keeping the token local to the machine.
+ * On Windows we also tolerate a one-time `?_token=<hex>` query parameter to
+ * survive launcher/browser combinations that drop fragments.
  *
  * On first load this module extracts the token from the fragment, persists
- * it to sessionStorage (so it survives page refreshes), and clears the
- * fragment from the address bar. All subsequent API calls attach the token
- * via the `Authorization: Bearer` header.
+ * it to sessionStorage (so it survives page refreshes), mirrors it into a
+ * same-site session cookie (so plain reloads/new tabs in the same browser
+ * session keep working), and clears the token from the address bar. All
+ * subsequent API calls attach the token via the `Authorization: Bearer`
+ * header.
  *
  * For EventSource (SSE), which cannot send custom headers, the token is
  * appended as a `?_token=` query parameter instead.
  */
 
 const SESSION_STORAGE_KEY = "gsd-auth-token"
+const COOKIE_KEY = "gsd-auth-token"
 
 let cachedToken: string | null = null
+
+function persistToken(token: string): void {
+  cachedToken = token
+
+  try {
+    sessionStorage.setItem(SESSION_STORAGE_KEY, token)
+  } catch {
+    // Storage unavailable (e.g. private browsing quota exceeded) — the
+    // in-memory cache still works for the current page lifecycle.
+  }
+
+  try {
+    document.cookie = `${COOKIE_KEY}=${encodeURIComponent(token)}; Path=/; SameSite=Strict`
+  } catch {
+    // Cookie writes are best-effort only.
+  }
+}
+
+function clearTokenFromUrl(): void {
+  const url = new URL(window.location.href)
+  url.hash = ""
+  url.searchParams.delete("_token")
+  url.searchParams.delete("token")
+  const cleanUrl = `${url.pathname}${url.search}${url.hash}`
+  window.history.replaceState(null, "", cleanUrl)
+}
 
 /**
  * Extract the auth token from the URL fragment on first call, then return
  * the cached value. Falls back to sessionStorage so the token survives
  * page refreshes (which clear the in-memory cache and the URL fragment).
- * Clears the fragment from the address bar after extraction.
+ * Clears the fragment / one-time query param from the address bar after
+ * extraction.
  */
 export function getAuthToken(): string | null {
   if (cachedToken !== null) return cachedToken
@@ -35,24 +65,27 @@ export function getAuthToken(): string | null {
   if (hash) {
     const match = hash.match(/token=([a-fA-F0-9]+)/)
     if (match) {
-      cachedToken = match[1]
-      // Persist to sessionStorage so the token survives page refreshes.
-      // sessionStorage is scoped to this browser tab — it does not leak
-      // to other tabs or persist after the tab is closed.
-      try {
-        sessionStorage.setItem(SESSION_STORAGE_KEY, cachedToken)
-      } catch {
-        // Storage unavailable (e.g. private browsing quota exceeded) — the
-        // in-memory cache still works for the current page lifecycle.
-      }
-      // Clear the fragment so the token isn't visible in the address bar
-      // or leaked via the Referer header on external navigations.
-      window.history.replaceState(null, "", window.location.pathname + window.location.search)
+      persistToken(match[1])
+      clearTokenFromUrl()
       return cachedToken
     }
   }
 
-  // 2. Fall back to sessionStorage (page refresh, bookmark without hash)
+  // 2. Try a one-time query parameter fallback (Windows browser launchers may
+  // drop fragments but preserve the query string).
+  try {
+    const url = new URL(window.location.href)
+    const token = url.searchParams.get("_token") ?? url.searchParams.get("token")
+    if (token && /^[a-fA-F0-9]+$/.test(token)) {
+      persistToken(token)
+      clearTokenFromUrl()
+      return cachedToken
+    }
+  } catch {
+    // Malformed URL — fall through to storage/cookie fallback
+  }
+
+  // 3. Fall back to sessionStorage (page refresh, bookmark without hash)
   try {
     const stored = sessionStorage.getItem(SESSION_STORAGE_KEY)
     if (stored) {
@@ -61,6 +94,21 @@ export function getAuthToken(): string | null {
     }
   } catch {
     // Storage unavailable — fall through to null
+  }
+
+  // 4. Fall back to the session cookie so a plain new tab still works after
+  // one authenticated launch in the same browser session.
+  try {
+    const cookie = document.cookie
+      .split(";")
+      .map((part) => part.trim())
+      .find((part) => part.startsWith(`${COOKIE_KEY}=`))
+    if (cookie) {
+      cachedToken = decodeURIComponent(cookie.slice(COOKIE_KEY.length + 1))
+      return cachedToken
+    }
+  } catch {
+    // Cookie access unavailable — fall through to null
   }
 
   return null

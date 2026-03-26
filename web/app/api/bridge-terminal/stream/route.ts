@@ -41,12 +41,14 @@ export async function GET(request: Request): Promise<Response> {
       try {
         await bridge.ensureStarted();
       } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
         controller.enqueue(
           encodeEvent({
             type: "output",
-            data: `\u001b[31mFailed to start main bridge terminal: ${error instanceof Error ? error.message : String(error)}\u001b[0m\r\n`,
+            data: `\u001b[31mFailed to start main bridge terminal: ${message}\u001b[0m\r\n`,
           }),
         );
+        controller.enqueue(encodeEvent({ type: "error", data: message }));
       }
 
       unsubscribe = bridge.subscribeTerminal((data) => {
@@ -54,18 +56,19 @@ export async function GET(request: Request): Promise<Response> {
         controller.enqueue(encodeEvent({ type: "output", data }));
       });
 
-      controller.enqueue(encodeEvent({ type: "connected" }));
-
       try {
         await bridge.resizeTerminal(cols, rows);
         await bridge.redrawTerminal();
+        controller.enqueue(encodeEvent({ type: "connected" }));
       } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
         controller.enqueue(
           encodeEvent({
             type: "output",
-            data: `\u001b[31mFailed to attach to main bridge terminal: ${error instanceof Error ? error.message : String(error)}\u001b[0m\r\n`,
+            data: `\u001b[31mFailed to attach to main bridge terminal: ${message}\u001b[0m\r\n`,
           }),
         );
+        controller.enqueue(encodeEvent({ type: "error", data: message }));
       }
 
       request.signal.addEventListener("abort", () => closeWith(controller), { once: true });

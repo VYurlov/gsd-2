@@ -1095,6 +1095,7 @@ export function ProjectSelectionGate() {
               width={100}
               height={28}
               className="h-7 w-auto dark:hidden"
+              style={{ width: "auto" }}
             />
             <Image
               src="/logo-white.svg"
@@ -1102,6 +1103,7 @@ export function ProjectSelectionGate() {
               width={100}
               height={28}
               className="h-7 w-auto hidden dark:block"
+              style={{ width: "auto" }}
             />
             <p className="mt-3 text-sm text-muted-foreground">
               Select a project to get started

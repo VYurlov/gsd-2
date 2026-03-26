@@ -13,11 +13,31 @@ const DEFAULT_PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '.
 /** Open a URL in the user's default browser. */
 function openBrowser(url: string): void {
   if (process.platform === 'win32') {
-    // PowerShell's Start-Process handles URLs with '&' safely; cmd /c start does not.
-    execFile('powershell', ['-c', `Start-Process '${url.replace(/'/g, "''")}'`], () => {})
+    const escapedUrl = url.replace(/"/g, '""')
+    exec(`start "" "${escapedUrl}"`, { windowsHide: true }, (startError) => {
+      if (!startError) return
+      execFile(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', 'Start-Process -FilePath $args[0]', '--', url],
+        { windowsHide: true },
+        (powershellError) => {
+          if (!powershellError) return
+          execFile('rundll32.exe', ['url.dll,FileProtocolHandler', url], { windowsHide: true }, (rundllError) => {
+            if (!rundllError) return
+            execFile('explorer.exe', [url], { windowsHide: true }, (explorerError) => {
+              if (!explorerError) return
+              console.error(`[gsd] Could not open browser: ${explorerError.message}`)
+            })
+          })
+        },
+      )
+    })
   } else {
     const cmd = process.platform === 'darwin' ? 'open' : 'xdg-open'
-    execFile(cmd, [url], () => {})
+    execFile(cmd, [url], (error) => {
+      if (!error) return
+      console.error(`[gsd] Could not open browser: ${error.message}`)
+    })
   }
 }
 
@@ -98,6 +118,11 @@ export interface WebModeDeps {
   env?: NodeJS.ProcessEnv
   platform?: NodeJS.Platform
   execPath?: string
+  spawnWindowsHiddenProcess?: (
+    command: string,
+    args: string[],
+    options: { cwd: string; env: NodeJS.ProcessEnv },
+  ) => Promise<SpawnedChildLike>
   pidFilePath?: string
   writePidFile?: (path: string, pid: number) => void
   readPidFile?: (path: string) => number | null
@@ -349,10 +374,6 @@ export async function reserveWebPort(host = DEFAULT_HOST): Promise<number> {
   })
 }
 
-function getSpawnCommandForSourceHost(platform: NodeJS.Platform): string {
-  return platform === 'win32' ? 'npm.cmd' : 'npm'
-}
-
 function formatLaunchStatus(status: WebModeLaunchStatus): string {
   if (status.ok) {
     return `[gsd] Web mode startup: status=started cwd=${status.cwd} port=${status.port} host=${status.hostPath} kind=${status.hostKind} url=${status.url}\n`
@@ -363,6 +384,21 @@ function formatLaunchStatus(status: WebModeLaunchStatus): string {
 
 function emitLaunchStatus(stderr: WritableLike, status: WebModeLaunchStatus): void {
   stderr.write(formatLaunchStatus(status))
+}
+
+function buildAuthenticatedBrowserUrl(
+  baseUrl: string,
+  authToken: string,
+  platform: NodeJS.Platform,
+): string {
+  const url = new URL(baseUrl)
+  if (platform === 'win32') {
+    // Preserve the token even when the Windows browser launcher drops URL
+    // fragments before the browser sees them.
+    url.searchParams.set('_token', authToken)
+  }
+  url.hash = `token=${authToken}`
+  return url.toString()
 }
 
 function buildSpawnSpec(
@@ -380,9 +416,12 @@ function buildSpawnSpec(
     }
   }
 
+  // Launch Next.js directly instead of `npm run dev` so detached source-dev
+  // hosts can start reliably on Windows.
+  const nextCliPath = join(resolution.hostRoot, 'node_modules', 'next', 'dist', 'bin', 'next')
   return {
-    command: getSpawnCommandForSourceHost(platform),
-    args: ['run', 'dev', '--', '--hostname', host, '--port', String(port)],
+    command: execPath,
+    args: [nextCliPath, 'dev', '--webpack', '--hostname', host, '--port', String(port)],
     cwd: resolution.hostRoot,
   }
 }
@@ -408,6 +447,58 @@ async function spawnDetachedProcess(
     } catch (error) {
       resolve({ ok: false, error })
     }
+  })
+}
+
+async function spawnWindowsHiddenProcess(
+  command: string,
+  args: string[],
+  options: { cwd: string; env: NodeJS.ProcessEnv },
+): Promise<SpawnedChildLike> {
+  const launcherEnv = {
+    ...options.env,
+    GSD_WIN_HIDDEN_COMMAND: command,
+    GSD_WIN_HIDDEN_CWD: options.cwd,
+    GSD_WIN_HIDDEN_ARGS_JSON: JSON.stringify(args),
+  }
+
+  const powershellArgs = [
+    '-NoProfile',
+    '-NonInteractive',
+    '-WindowStyle',
+    'Hidden',
+    '-Command',
+    '$ErrorActionPreference = "Stop"; $command = $env:GSD_WIN_HIDDEN_COMMAND; $workingDirectory = $env:GSD_WIN_HIDDEN_CWD; $argumentList = @(); if ($env:GSD_WIN_HIDDEN_ARGS_JSON) { $argumentList = ConvertFrom-Json -InputObject $env:GSD_WIN_HIDDEN_ARGS_JSON }; $process = Start-Process -WindowStyle Hidden -PassThru -FilePath $command -WorkingDirectory $workingDirectory -ArgumentList $argumentList; [Console]::Out.Write($process.Id)',
+  ]
+
+  return await new Promise<SpawnedChildLike>((resolveProcess, reject) => {
+    execFile(
+      'powershell.exe',
+      powershellArgs,
+      {
+        cwd: options.cwd,
+        env: launcherEnv,
+        windowsHide: true,
+      },
+      (error, stdout) => {
+        if (error) {
+          reject(error)
+          return
+        }
+
+        const pid = Number.parseInt(String(stdout).trim(), 10)
+        if (!Number.isFinite(pid) || pid <= 0) {
+          reject(new Error(`Windows hidden process launcher returned invalid PID: ${String(stdout).trim()}`))
+          return
+        }
+
+        resolveProcess({
+          pid,
+          once: () => undefined,
+          unref: () => undefined,
+        })
+      },
+    )
   })
 }
 
@@ -546,6 +637,7 @@ export async function launchWebMode(
 ): Promise<WebModeLaunchStatus> {
   const stderr = deps.stderr ?? process.stderr
   const host = options.host ?? DEFAULT_HOST
+  const platform = deps.platform ?? process.platform
   const resolution = resolveWebHostBootstrap({
     packageRoot: options.packageRoot,
     existsSync: deps.existsSync,
@@ -621,23 +713,41 @@ export async function launchWebMode(
     resolution,
     host,
     port,
-    deps.platform ?? process.platform,
+    platform,
     deps.execPath ?? process.execPath,
   )
 
   stderr.write(`[gsd] Launching web host on port ${port}…\n`)
 
-  const spawnResult = await spawnDetachedProcess(
-    deps.spawn ?? ((command, args, spawnOptions) => spawn(command, args, spawnOptions)),
-    spawnSpec.command,
-    spawnSpec.args,
-    {
-      cwd: spawnSpec.cwd,
-      detached: true,
-      stdio: 'ignore',
-      env,
-    },
-  )
+  const spawnResult =
+    platform === 'win32' && resolution.kind === 'source-dev'
+      ? await (async () => {
+          try {
+            const child = await (deps.spawnWindowsHiddenProcess ?? spawnWindowsHiddenProcess)(
+              spawnSpec.command,
+              spawnSpec.args,
+              {
+                cwd: spawnSpec.cwd,
+                env,
+              },
+            )
+            return { ok: true as const, child }
+          } catch (error) {
+            return { ok: false as const, error }
+          }
+        })()
+      : await spawnDetachedProcess(
+          deps.spawn ?? ((command, args, spawnOptions) => spawn(command, args, spawnOptions)),
+          spawnSpec.command,
+          spawnSpec.args,
+          {
+            cwd: spawnSpec.cwd,
+            detached: true,
+            stdio: 'ignore',
+            env,
+            windowsHide: true,
+          },
+        )
 
   if (!spawnResult.ok) {
     const failure: WebModeLaunchFailure = {
@@ -687,7 +797,7 @@ export async function launchWebMode(
       // Register in multi-instance registry
       registerInstance(options.cwd, { pid, port, url }, deps.registryPath)
     }
-    const authenticatedUrl = `${url}/#token=${authToken}`
+    const authenticatedUrl = buildAuthenticatedBrowserUrl(url, authToken, platform)
     try {
       ;(deps.openBrowser ?? openBrowser)(authenticatedUrl)
     } catch (browserError) {
@@ -711,7 +821,7 @@ export async function launchWebMode(
     return failure
   }
 
-  const authenticatedUrl = `${url}/#token=${authToken}`
+  const authenticatedUrl = buildAuthenticatedBrowserUrl(url, authToken, platform)
   const success: WebModeLaunchSuccess = {
     mode: 'web',
     ok: true,

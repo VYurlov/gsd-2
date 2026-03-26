@@ -2,16 +2,17 @@
 
 import { spawn } from 'node:child_process'
 import { dirname, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const root = resolve(__dirname, '..')
 const srcLoaderPath = resolve(root, 'src', 'loader.ts')
 const resolveTsPath = resolve(root, 'src', 'resources', 'extensions', 'gsd', 'tests', 'resolve-ts.mjs')
+const resolveTsHref = pathToFileURL(resolveTsPath).href
 
 const child = spawn(
   process.execPath,
-  ['--import', resolveTsPath, '--experimental-strip-types', srcLoaderPath, ...process.argv.slice(2)],
+  ['--import', resolveTsHref, '--experimental-strip-types', srcLoaderPath, ...process.argv.slice(2)],
   {
     cwd: process.cwd(),
     stdio: 'inherit',
